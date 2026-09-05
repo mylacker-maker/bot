@@ -5,29 +5,16 @@ import random
 import asyncio
 import time
 import threading
-import urllib.request
-import json
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+import base64
+import io
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, filters, ContextTypes)
 
-def load_token():
-    token = os.environ.get("BOT_TOKEN")
-    if token:
-        return token
-    try:
-        from google.colab import userdata
-        return userdata.get("BOT_TOKEN")
-    except (ImportError, AttributeError):
-        return None
-
-TOKEN = load_token()
-if not TOKEN:
-    raise RuntimeError("Добавьте секрет BOT_TOKEN")
-
+# ТОКЕН ВШИТ ПРЯМО В КОД, БЕЗ .env
+TOKEN = "7894507440:AAGr5x8nxmdPh5ciP8g2WiuRccsbbC4EmgM"
 DB = "peascards.db"
 ADMIN_USERNAME = "lackeri"
-FIREBASE_URL = "https://lackerteam-default-rtdb.firebaseio.com/peascards"
 
 RARITIES = {
     'Обычный':      {'e': '⚪', 'price': 99},
@@ -72,72 +59,11 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 user_states = {}
 db_lock = threading.Lock()
 
-# === FIREBASE ИНТЕГРАЦИЯ ===
-def restore_from_firebase():
-    """Восстанавливает данные пользователей из Firebase при запуске"""
-    try:
-        url = f"{FIREBASE_URL}/users.json"
-        with urllib.request.urlopen(url) as response:
-            data = response.read().decode()
-            fb_users = json.loads(data) if data else {}
-        
-        if not fb_users:
-            logging.info("Firebase пуст, используем локальную базу")
-            return False
-            
-        with db_lock:
-            conn = db()
-            try:
-                for uid_str, u_data in fb_users.items():
-                    uid = int(uid_str)
-                    conn.execute("""
-                        INSERT INTO users (user_id, username, name, coins, diamonds, chance, last_peas, last_epic_peas, is_admin, is_banned, farm_enabled, farm_card_id, farm_rarity)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(user_id) DO UPDATE SET
-                        username=excluded.username, name=excluded.name, coins=excluded.coins, 
-                        diamonds=excluded.diamonds, chance=excluded.chance, last_peas=excluded.last_peas,
-                        last_epic_peas=excluded.last_epic_peas, is_admin=excluded.is_admin, 
-                        is_banned=excluded.is_banned, farm_enabled=excluded.farm_enabled,
-                        farm_card_id=excluded.farm_card_id, farm_rarity=excluded.farm_rarity
-                    """, (
-                        uid, u_data.get('username'), u_data.get('name'), u_data.get('coins', 0),
-                        u_data.get('diamonds', 0), u_data.get('chance', 10.0), u_data.get('last_peas', 0),
-                        u_data.get('last_epic_peas', 0), u_data.get('is_admin', 0), u_data.get('is_banned', 0),
-                        u_data.get('farm_enabled', 0), u_data.get('farm_card_id'), u_data.get('farm_rarity')
-                    ))
-                conn.commit()
-                logging.info("Данные успешно восстановлены из Firebase")
-                return True
-            finally:
-                conn.close()
-    except Exception as e:
-        logging.warning(f"Ошибка восстановления из Firebase (проверьте правила доступа): {e}")
-        return False
-
-def sync_to_firebase():
-    """Синхронизирует всю таблицу пользователей с Firebase"""
-    try:
-        with db_lock:
-            conn = db()
-            try:
-                users = conn.execute("SELECT * FROM users").fetchall()
-                users_dict = {str(u['user_id']): dict(u) for u in users}
-            finally:
-                conn.close()
-        
-        url = f"{FIREBASE_URL}/users.json"
-        req = urllib.request.Request(url, data=json.dumps(users_dict).encode(), method='PUT')
-        with urllib.request.urlopen(req) as response:
-            logging.info("Данные синхронизированы с Firebase")
-            return True
-    except Exception as e:
-        logging.warning(f"Ошибка синхронизации с Firebase: {e}")
-        return False
-
 # === БАЗА ДАННЫХ ===
 def init_db():
     conn = sqlite3.connect(DB, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
+    # ДОБАВЛЕНО: photo_base64 для вечного хранения картинок прямо в базе
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, name TEXT,
@@ -149,7 +75,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS cards (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
-            photo_file_id TEXT, author TEXT,
+            photo_base64 TEXT, author TEXT,
             excl_limit INTEGER DEFAULT 0, excl_count INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS user_cards (
@@ -163,7 +89,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS rest_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
-            card_name TEXT, photo_file_id TEXT, status TEXT DEFAULT 'pending'
+            card_name TEXT, photo_base64 TEXT, status TEXT DEFAULT 'pending'
         );
         CREATE TABLE IF NOT EXISTS support_tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
@@ -260,7 +186,7 @@ def get_user_cards(uid):
         conn = db()
         try:
             rows = conn.execute(
-                "SELECT uc.*, c.name as card_name, c.photo_file_id, c.excl_limit "
+                "SELECT uc.*, c.name as card_name, c.photo_base64, c.excl_limit "
                 "FROM user_cards uc JOIN cards c ON uc.card_id=c.id WHERE uc.user_id=? AND uc.quantity>0",
                 (uid,)
             ).fetchall()
@@ -450,7 +376,6 @@ async def farm_loop(app):
                     conn.commit()
                 finally:
                     conn.close()
-            sync_to_firebase() # Синхронизируем после начисления
         except Exception as e:
             logging.error(f"Farm loop error: {e}")
             await asyncio.sleep(60)
@@ -591,7 +516,6 @@ async def resel_cmd(update: Update, ctx):
                 conn.commit()
             finally:
                 conn.close()
-        sync_to_firebase()
         await update.message.reply_text(f"Начислено {amount}$ всем игрокам.")
         return
 
@@ -601,7 +525,6 @@ async def resel_cmd(update: Update, ctx):
         await update.message.reply_text("Пользователь не найден.")
         return
     add_coins(target['user_id'], amount)
-    sync_to_firebase()
     await update.message.reply_text(f"Начислено {amount}$ пользователю @{username}")
     try:
         await ctx.bot.send_message(target['user_id'], f"Вам начислено {amount}$")
@@ -699,7 +622,6 @@ async def money_cmd(update: Update, ctx):
             return
     
     add_coins(target_id, amount)
-    sync_to_firebase()
     target = get_user(target_id)
     await update.message.reply_text(f"Начислено {amount}$ пользователю {target['name']}")
     try:
@@ -787,7 +709,7 @@ async def farm_cmd(update: Update, ctx):
     
     farm_status = "Активна" if u['farm_enabled'] else "Неактивна"
     farm_card_info = "Не установлена"
-    farm_photo = None
+    
     if u['farm_card_id'] and u['farm_rarity']:
         with db_lock:
             conn = db()
@@ -797,7 +719,6 @@ async def farm_cmd(update: Update, ctx):
                     ri = RARITIES[u['farm_rarity']]
                     income = FARM_INCOME.get(u['farm_rarity'], 0)
                     farm_card_info = f"{card['name']} {ri['e']} ({income}$ за 5 мин)"
-                    farm_photo = card['photo_file_id']
             finally:
                 conn.close()
     
@@ -813,11 +734,7 @@ async def farm_cmd(update: Update, ctx):
         f"Карта: {farm_card_info}\n\n"
         f"Ферма начисляет монеты каждые 5 минут в зависимости от редкости карты."
     )
-    
-    if farm_photo:
-        await update.message.reply_photo(photo=farm_photo, caption=text, reply_markup=InlineKeyboardMarkup(kb))
-    else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def leaders_cmd(update: Update, ctx):
     uid = update.effective_user.id
@@ -1043,8 +960,8 @@ async def handle_text(update: Update, ctx):
                 conn = db()
                 try:
                     conn.execute(
-                        "INSERT INTO cards (name,photo_file_id,author,excl_limit) VALUES (?,?,?,?)",
-                        (state['card_name'], state['photo_id'], 'PeasCards', limit)
+                        "INSERT INTO cards (name,photo_base64,author,excl_limit) VALUES (?,?,?,?)",
+                        (state['card_name'], state['photo_base64'], 'PeasCards', limit)
                     )
                     conn.commit()
                 finally:
@@ -1071,8 +988,8 @@ async def handle_text(update: Update, ctx):
                     req = conn.execute("SELECT * FROM rest_requests WHERE id=?", (req_id,)).fetchone()
                     if req and req['status'] == 'pending':
                         conn.execute(
-                            "INSERT INTO cards (name,photo_file_id,author,excl_limit) VALUES (?,?,?,?)",
-                            (req['card_name'], req['photo_file_id'], 'PeasCards', limit)
+                            "INSERT INTO cards (name,photo_base64,author,excl_limit) VALUES (?,?,?,?)",
+                            (req['card_name'], req['photo_base64'], 'PeasCards', limit)
                         )
                         conn.execute("UPDATE rest_requests SET status='accepted' WHERE id=?", (req_id,))
                         conn.commit()
@@ -1141,7 +1058,6 @@ async def handle_text(update: Update, ctx):
             rarity = state['rarity']
             target_id = state['target_id']
             add_user_card(target_id, card_id, rarity, qty)
-            sync_to_firebase()
             user_states.pop(uid, None)
             with db_lock:
                 conn = db()
@@ -1190,7 +1106,6 @@ async def handle_text(update: Update, ctx):
                 await update.message.reply_text("Недостаточно карт у пользователя.")
                 user_states.pop(uid, None)
                 return
-            sync_to_firebase()
             user_states.pop(uid, None)
             with db_lock:
                 conn = db()
@@ -1288,7 +1203,11 @@ async def handle_photo(update: Update, ctx):
     photo = update.message.photo[-1]
 
     if state.get('action') == 'rest_photo':
-        user_states[uid] = {'action': 'rest_confirm', 'card_name': state['card_name'], 'photo_id': photo.file_id}
+        file = await ctx.bot.get_file(photo.file_id)
+        file_bytes = await file.download_as_bytearray()
+        photo_b64 = base64.b64encode(file_bytes).decode('utf-8')
+        
+        user_states[uid] = {'action': 'rest_confirm', 'card_name': state['card_name'], 'photo_base64': photo_b64}
         kb = [
             [InlineKeyboardButton("Отправить", callback_data=f"rest_send:{uid}")],
             [InlineKeyboardButton("Отмена", callback_data=f"rest_cancel:{uid}")]
@@ -1299,7 +1218,11 @@ async def handle_photo(update: Update, ctx):
         return
 
     if state.get('action') == 'addcard_photo':
-        user_states[uid] = {'action': 'addcard_excl', 'card_name': state['card_name'], 'photo_id': photo.file_id}
+        file = await ctx.bot.get_file(photo.file_id)
+        file_bytes = await file.download_as_bytearray()
+        photo_b64 = base64.b64encode(file_bytes).decode('utf-8')
+        
+        user_states[uid] = {'action': 'addcard_excl', 'card_name': state['card_name'], 'photo_base64': photo_b64}
         await update.message.reply_text("Сколько эксклюзивных копий? (0 = без эксклюзива):")
         return
 
@@ -1347,8 +1270,10 @@ async def button_handler(update: Update, ctx):
         text = (f"{card['name'].upper()}\n{rarity.upper()} {r_info['e']}\n\n"
                 f"Осталось: {remaining}\nАвтор: {card['author']}")
         await safe_del(query.message)
-        if card['photo_file_id']:
-            await query.message.chat.send_photo(photo=card['photo_file_id'], caption=text, reply_markup=InlineKeyboardMarkup(kb))
+        
+        if card.get('photo_base64'):
+            photo_bytes = base64.b64decode(card['photo_base64'])
+            await query.message.chat.send_photo(photo=io.BytesIO(photo_bytes), caption=text, reply_markup=InlineKeyboardMarkup(kb))
         else:
             await query.message.chat.send_message(text, reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -1398,8 +1323,9 @@ async def button_handler(update: Update, ctx):
             if card_result:
                 results.append(f"{card['name']} — {rarity} {ri['e']}")
             
-            if card['photo_file_id']:
-                media_group.append(InputMediaPhoto(media=card['photo_file_id'], caption=f"{card['name']}\n{rarity} {ri['e']}"))
+            if card.get('photo_base64'):
+                photo_bytes = base64.b64decode(card['photo_base64'])
+                media_group.append(InputMediaPhoto(media=io.BytesIO(photo_bytes), caption=f"{card['name']}\n{rarity} {ri['e']}"))
             else:
                 results.append(f"{card['name']} — {rarity} {ri['e']} (без фото)")
         
@@ -1413,8 +1339,6 @@ async def button_handler(update: Update, ctx):
             await query.message.chat.send_message(result_text)
         else:
             await query.message.chat.send_message("Эпический горошек получен. Проверьте инвентарь.")
-        
-        sync_to_firebase()
         return
 
     if action == "get_card":
@@ -1431,15 +1355,12 @@ async def button_handler(update: Update, ctx):
             u = get_user(uid)
             if not u['farm_enabled']:
                 await query.message.chat.send_message("Теперь вы можете включить авто ферму. Напишите /farm")
-        
-        sync_to_firebase()
         return
 
     if action == "sell_drop":
         card_id, rarity = int(parts[2]), parts[3]
         price = RARITIES[rarity]['price']
         add_coins(uid, price)
-        sync_to_firebase()
         await safe_del(query.message)
         await query.message.chat.send_message(f"Продано за {price}$")
         return
@@ -1472,8 +1393,9 @@ async def button_handler(update: Update, ctx):
         
         txt = f"{card['name']} {ri['e']} {rarity}\nКоличество: {uc['quantity']}"
         await safe_del(query.message)
-        if card['photo_file_id']:
-            await query.message.chat.send_photo(photo=card['photo_file_id'], caption=txt, reply_markup=InlineKeyboardMarkup(kb))
+        if card.get('photo_base64'):
+            photo_bytes = base64.b64decode(card['photo_base64'])
+            await query.message.chat.send_photo(photo=io.BytesIO(photo_bytes), caption=txt, reply_markup=InlineKeyboardMarkup(kb))
         else:
             await query.message.chat.send_message(txt, reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -1485,7 +1407,6 @@ async def button_handler(update: Update, ctx):
             return
         price = RARITIES[rarity]['price']
         add_coins(uid, price)
-        sync_to_firebase()
         await safe_del(query.message)
         await query.message.chat.send_message(f"Продано за {price}$")
         return
@@ -1506,7 +1427,6 @@ async def button_handler(update: Update, ctx):
             remove_user_card(uid, card_id, rarity, 1)
         price = RARITIES[rarity]['price'] * qty
         add_coins(uid, price)
-        sync_to_firebase()
         await safe_del(query.message)
         await query.message.chat.send_message(f"Продано {qty} карт за {price}$")
         return
@@ -1515,7 +1435,6 @@ async def button_handler(update: Update, ctx):
         card_id, from_rarity = int(parts[2]), parts[3]
         success, new_rarity, error_msg = upgrade_card(uid, card_id, from_rarity)
         if success:
-            sync_to_firebase()
             await safe_del(query.message)
             await query.message.chat.send_message(f"Карта успешно улучшена до редкости {new_rarity} {RARITIES[new_rarity]['e']}")
         else:
@@ -1546,7 +1465,7 @@ async def button_handler(update: Update, ctx):
         with db_lock:
             conn = db()
             try:
-                conn.execute("INSERT INTO rest_requests (user_id,card_name,photo_file_id) VALUES (?,?,?)", (uid, state['card_name'], state['photo_id']))
+                conn.execute("INSERT INTO rest_requests (user_id,card_name,photo_base64) VALUES (?,?,?)", (uid, state['card_name'], state['photo_base64']))
                 req_id = conn.execute("SELECT last_insert_rowid()")[0]
                 conn.commit()
             finally:
@@ -1566,8 +1485,9 @@ async def button_handler(update: Update, ctx):
                 [InlineKeyboardButton("Заблокировать", callback_data=f"admin_ban:{admin['user_id']}:{req_id}")],
             ]
             try:
-                if state['photo_id']:
-                    await ctx.bot.send_photo(admin['user_id'], photo=state['photo_id'], caption=caption, reply_markup=InlineKeyboardMarkup(kb))
+                if state.get('photo_base64'):
+                    photo_bytes = base64.b64decode(state['photo_base64'])
+                    await ctx.bot.send_photo(admin['user_id'], photo=io.BytesIO(photo_bytes), caption=caption, reply_markup=InlineKeyboardMarkup(kb))
                 else:
                     await ctx.bot.send_message(admin['user_id'], caption, reply_markup=InlineKeyboardMarkup(kb))
             except: pass
@@ -1716,7 +1636,6 @@ async def button_handler(update: Update, ctx):
                 conn.commit()
             finally:
                 conn.close()
-        sync_to_firebase()
         u = get_user(uid)
         await safe_del(query.message)
         await query.message.chat.send_message(f"Шанс обновлен: {u['chance']}%. Баланс: {u['coins']}$")
@@ -1741,7 +1660,6 @@ async def button_handler(update: Update, ctx):
                 conn.commit()
             finally:
                 conn.close()
-        sync_to_firebase()
         await safe_del(query.message)
         await query.message.chat.send_message(f"Обмен выполнен. Получено {diamonds} алмазов.")
         return
@@ -1761,7 +1679,7 @@ async def button_handler(update: Update, ctx):
             try:
                 total = conn.execute("SELECT COUNT(*) FROM market_listings").fetchone()[0]
                 listings = conn.execute(
-                    "SELECT ml.*, u.name as sn, u.username as su, c.name as cn, c.photo_file_id "
+                    "SELECT ml.*, u.name as sn, u.username as su, c.name as cn, c.photo_base64 "
                     "FROM market_listings ml JOIN users u ON ml.seller_id=u.user_id JOIN cards c ON ml.card_id=c.id "
                     "ORDER BY ml.price_diamonds ASC LIMIT ? OFFSET ?", (per_page, offset)
                 ).fetchall()
@@ -1795,7 +1713,7 @@ async def button_handler(update: Update, ctx):
         with db_lock:
             conn = db()
             try:
-                l = conn.execute("SELECT ml.*, u.name as sn, u.username as su, c.name as cn, c.photo_file_id FROM market_listings ml JOIN users u ON ml.seller_id=u.user_id JOIN cards c ON ml.card_id=c.id WHERE ml.id=?", (lid,)).fetchone()
+                l = conn.execute("SELECT ml.*, u.name as sn, u.username as su, c.name as cn, c.photo_base64 FROM market_listings ml JOIN users u ON ml.seller_id=u.user_id JOIN cards c ON ml.card_id=c.id WHERE ml.id=?", (lid,)).fetchone()
             finally:
                 conn.close()
         if not l:
@@ -1809,8 +1727,9 @@ async def button_handler(update: Update, ctx):
             [InlineKeyboardButton("Назад", callback_data=f"mkt_new:{uid}:0")]
         ]
         await safe_del(query.message)
-        if l['photo_file_id']:
-            await query.message.chat.send_photo(photo=l['photo_file_id'], caption=txt, reply_markup=InlineKeyboardMarkup(kb))
+        if l.get('photo_base64'):
+            photo_bytes = base64.b64decode(l['photo_base64'])
+            await query.message.chat.send_photo(photo=io.BytesIO(photo_bytes), caption=txt, reply_markup=InlineKeyboardMarkup(kb))
         else:
             await query.message.chat.send_message(txt, reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -1844,7 +1763,6 @@ async def button_handler(update: Update, ctx):
             finally:
                 conn.close()
         add_user_card(uid, l['card_id'], l['rarity'], l['quantity'])
-        sync_to_firebase()
         await safe_del(query.message)
         await query.message.chat.send_message(f"Покупка завершена. Списано {l['price_diamonds']} алмазов.")
         try: await ctx.bot.send_message(l['seller_id'], f"Ваша карта продана. Начислено {earnings}$")
@@ -1966,7 +1884,6 @@ async def button_handler(update: Update, ctx):
                 conn.commit()
             finally:
                 conn.close()
-        sync_to_firebase()
         await safe_del(query.message)
         await query.message.chat.send_message("Карта выставлена на рынок.")
         return
@@ -1997,7 +1914,6 @@ async def button_handler(update: Update, ctx):
             return
         new_status = 0 if u['farm_enabled'] else 1
         update_user(uid, 'farm_enabled', new_status)
-        sync_to_firebase()
         status_text = "Активна" if new_status else "Неактивна"
         await query.answer(f"Ферма: {status_text}")
         await farm_cmd(update, ctx)
@@ -2022,7 +1938,6 @@ async def button_handler(update: Update, ctx):
         card_id, rarity = int(parts[2]), parts[3]
         update_user(uid, 'farm_card_id', card_id)
         update_user(uid, 'farm_rarity', rarity)
-        sync_to_firebase()
         with db_lock:
             conn = db()
             try:
@@ -2060,7 +1975,6 @@ async def post_init(app):
 
 def main():
     init_db()
-    restore_from_firebase() # Восстанавливаем данные из облака при старте
     
     app = Application.builder().token(TOKEN).build()
     
@@ -2089,7 +2003,7 @@ def main():
     
     app.post_init = post_init
     
-    logging.info("PeasCards запущен")
+    logging.info("PeasCards запущен на Railway")
     app.run_polling()
 
 if __name__ == '__main__':
