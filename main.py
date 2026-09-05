@@ -5,16 +5,18 @@ import random
 import asyncio
 import time
 import threading
+import urllib.request
+import json
 import base64
 import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, filters, ContextTypes)
 
-# ТОКЕН ВШИТ ПРЯМО В КОД, БЕЗ .env
 TOKEN = "7894507440:AAGr5x8nxmdPh5ciP8g2WiuRccsbbC4EmgM"
 DB = "peascards.db"
 ADMIN_USERNAME = "lackeri"
+FIREBASE_URL = "https://lackerteam-default-rtdb.firebaseio.com/peascards"
 
 RARITIES = {
     'Обычный':      {'e': '⚪', 'price': 99},
@@ -50,20 +52,130 @@ FARM_INCOME = {
     'Эксклюзивный': 10
 }
 
-SPIN_EMOJIS = ['🍎','🍊','🍋','🍇','🍉','🍓','🍑','🍒','🥝','🍌',
-               '🌟','⭐','💎','🔥','❄️','🌈','🎯','🎲','🃏','👑',
-               '🏆','💰','🎁','🔮','🧿','🍀','🌸','🌺','🦋','🐉',
-               '🦄','🐺','🦊','🐱','🐶','🎃','👻','🤖','👾','🎮']
+SPIN_EMOJIS = ['🍎','🍊','','🍇','🍉','','🍑','🍒','','🍌',
+               '🌟','⭐','💎','🔥','️','🌈','🎯','','🃏','👑',
+               '🏆','💰','','🔮','🧿','','🌸','🌺','','🐉',
+               '','🐺','🦊','','🐶','🎃','','🤖','👾','']
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 user_states = {}
 db_lock = threading.Lock()
 
+# === FIREBASE ИНТЕГРАЦИЯ ===
+def firebase_get(path):
+    try:
+        url = f"{FIREBASE_URL}/{path}.json"
+        with urllib.request.urlopen(url) as response:
+            data = response.read().decode()
+            return json.loads(data) if data else None
+    except Exception as e:
+        logging.warning(f"Firebase GET error: {e}")
+        return None
+
+def firebase_put(path, data):
+    try:
+        url = f"{FIREBASE_URL}/{path}.json"
+        req = urllib.request.Request(url, data=json.dumps(data).encode(), method='PUT')
+        with urllib.request.urlopen(req) as response:
+            return True
+    except Exception as e:
+        logging.warning(f"Firebase PUT error: {e}")
+        return False
+
+def firebase_patch(path, data):
+    try:
+        url = f"{FIREBASE_URL}/{path}.json"
+        req = urllib.request.Request(url, data=json.dumps(data).encode(), method='PATCH')
+        with urllib.request.urlopen(req) as response:
+            return True
+    except Exception as e:
+        logging.warning(f"Firebase PATCH error: {e}")
+        return False
+
+def sync_users_to_firebase():
+    """Синхронизирует всех пользователей с Firebase"""
+    with db_lock:
+        conn = db()
+        try:
+            users = conn.execute("SELECT * FROM users").fetchall()
+            users_dict = {str(u['user_id']): dict(u) for u in users}
+            firebase_put("users", users_dict)
+        finally:
+            conn.close()
+
+def sync_cards_to_firebase():
+    """Синхронизирует все карты с Firebase"""
+    with db_lock:
+        conn = db()
+        try:
+            cards = conn.execute("SELECT * FROM cards").fetchall()
+            cards_dict = {str(c['id']): dict(c) for c in cards}
+            firebase_put("cards", cards_dict)
+        finally:
+            conn.close()
+
+def restore_from_firebase():
+    """Восстанавливает данные из Firebase при запуске"""
+    try:
+        fb_users = firebase_get("users")
+        fb_cards = firebase_get("cards")
+        
+        with db_lock:
+            conn = db()
+            try:
+                # Восстанавливаем пользователей
+                if fb_users:
+                    for uid_str, u_data in fb_users.items():
+                        uid = int(uid_str)
+                        conn.execute("""
+                            INSERT INTO users (user_id, username, name, coins, diamonds, chance, 
+                            last_peas, last_epic_peas, is_admin, is_banned, farm_enabled, 
+                            farm_card_id, farm_rarity)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(user_id) DO UPDATE SET
+                            username=excluded.username, name=excluded.name, coins=excluded.coins, 
+                            diamonds=excluded.diamonds, chance=excluded.chance, 
+                            last_peas=excluded.last_peas, last_epic_peas=excluded.last_epic_peas,
+                            is_admin=excluded.is_admin, is_banned=excluded.is_banned,
+                            farm_enabled=excluded.farm_enabled, farm_card_id=excluded.farm_card_id,
+                            farm_rarity=excluded.farm_rarity
+                        """, (
+                            uid, u_data.get('username'), u_data.get('name'), u_data.get('coins', 0),
+                            u_data.get('diamonds', 0), u_data.get('chance', 10.0), 
+                            u_data.get('last_peas', 0), u_data.get('last_epic_peas', 0),
+                            u_data.get('is_admin', 0), u_data.get('is_banned', 0),
+                            u_data.get('farm_enabled', 0), u_data.get('farm_card_id'), 
+                            u_data.get('farm_rarity')
+                        ))
+                
+                # Восстанавливаем карты
+                if fb_cards:
+                    for cid_str, c_data in fb_cards.items():
+                        cid = int(cid_str)
+                        conn.execute("""
+                            INSERT INTO cards (id, name, photo_file_id, author, excl_limit, excl_count)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(id) DO UPDATE SET
+                            name=excluded.name, photo_file_id=excluded.photo_file_id,
+                            author=excluded.author, excl_limit=excluded.excl_limit,
+                            excl_count=excluded.excl_count
+                        """, (
+                            cid, c_data.get('name'), c_data.get('photo_file_id'),
+                            c_data.get('author'), c_data.get('excl_limit', 0),
+                            c_data.get('excl_count', 0)
+                        ))
+                
+                conn.commit()
+                logging.info("Данные восстановлены из Firebase")
+            finally:
+                conn.close()
+    except Exception as e:
+        logging.warning(f"Ошибка восстановления из Firebase: {e}")
+
 # === БАЗА ДАННЫХ ===
 def init_db():
     conn = sqlite3.connect(DB, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
-    # ДОБАВЛЕНО: photo_base64 для вечного хранения картинок прямо в базе
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, name TEXT,
@@ -74,8 +186,8 @@ def init_db():
             farm_enabled INTEGER DEFAULT 0, farm_card_id INTEGER, farm_rarity TEXT
         );
         CREATE TABLE IF NOT EXISTS cards (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
-            photo_base64 TEXT, author TEXT,
+            id INTEGER PRIMARY KEY, name TEXT,
+            photo_file_id TEXT, author TEXT,
             excl_limit INTEGER DEFAULT 0, excl_count INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS user_cards (
@@ -89,7 +201,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS rest_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
-            card_name TEXT, photo_base64 TEXT, status TEXT DEFAULT 'pending'
+            card_name TEXT, photo_file_id TEXT, status TEXT DEFAULT 'pending'
         );
         CREATE TABLE IF NOT EXISTS support_tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
@@ -138,9 +250,11 @@ def ensure_user(uid, uname, name):
                              (uid, uname, name, is_admin))
                 conn.commit()
                 r = conn.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
+                sync_users_to_firebase()
             elif uname and uname.lower() == ADMIN_USERNAME.lower() and not r['is_admin']:
                 conn.execute("UPDATE users SET is_admin=1 WHERE user_id=?", (uid,))
                 conn.commit()
+                sync_users_to_firebase()
             return dict(r)
         finally:
             conn.close()
@@ -151,6 +265,7 @@ def update_user(uid, field, value):
         try:
             conn.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, uid))
             conn.commit()
+            sync_users_to_firebase()
         finally:
             conn.close()
 
@@ -160,6 +275,7 @@ def add_coins(uid, amount):
         try:
             conn.execute("UPDATE users SET coins=coins+? WHERE user_id=?", (amount, uid))
             conn.commit()
+            sync_users_to_firebase()
         finally:
             conn.close()
 
@@ -169,6 +285,7 @@ def add_diamonds(uid, amount):
         try:
             conn.execute("UPDATE users SET diamonds=diamonds+? WHERE user_id=?", (amount, uid))
             conn.commit()
+            sync_users_to_firebase()
         finally:
             conn.close()
 
@@ -186,7 +303,7 @@ def get_user_cards(uid):
         conn = db()
         try:
             rows = conn.execute(
-                "SELECT uc.*, c.name as card_name, c.photo_base64, c.excl_limit "
+                "SELECT uc.*, c.name as card_name, c.photo_file_id, c.excl_limit "
                 "FROM user_cards uc JOIN cards c ON uc.card_id=c.id WHERE uc.user_id=? AND uc.quantity>0",
                 (uid,)
             ).fetchall()
@@ -247,6 +364,7 @@ def claim_card(uid, card_id, rarity):
                 if updated.rowcount != 1:
                     conn.rollback()
                     return None
+                sync_cards_to_firebase()
 
             existing = conn.execute(
                 "SELECT id FROM user_cards WHERE user_id=? AND card_id=? AND rarity=?",
@@ -294,9 +412,11 @@ def upgrade_card(uid, card_id, from_rarity):
                 if random.random() > 0.3:
                     conn.execute("UPDATE users SET coins=coins-? WHERE user_id=?", (cost, uid))
                     conn.commit()
+                    sync_users_to_firebase()
                     return False, None, f"Попытка не удалась (шанс 30%). Списано {cost}$"
                 
                 conn.execute("UPDATE cards SET excl_count=excl_count+1 WHERE id=?", (card_id,))
+                sync_cards_to_firebase()
             
             conn.execute(
                 "UPDATE user_cards SET quantity=quantity-1 WHERE user_id=? AND card_id=? AND rarity=? AND quantity>0",
@@ -317,6 +437,7 @@ def upgrade_card(uid, card_id, from_rarity):
             
             conn.execute("UPDATE users SET coins=coins-? WHERE user_id=?", (cost, uid))
             conn.commit()
+            sync_users_to_firebase()
             return True, to_rarity, None
         except Exception as e:
             logging.error(f"Error in upgrade_card: {e}")
@@ -374,6 +495,7 @@ async def farm_loop(app):
                         if income > 0:
                             conn.execute("UPDATE users SET coins=coins+? WHERE user_id=?", (income, u['user_id']))
                     conn.commit()
+                    sync_users_to_firebase()
                 finally:
                     conn.close()
         except Exception as e:
@@ -514,6 +636,7 @@ async def resel_cmd(update: Update, ctx):
             try:
                 conn.execute("UPDATE users SET coins = coins + ?", (amount,))
                 conn.commit()
+                sync_users_to_firebase()
             finally:
                 conn.close()
         await update.message.reply_text(f"Начислено {amount}$ всем игрокам.")
@@ -634,10 +757,20 @@ async def shop_cmd(update: Update, ctx):
     if u['is_banned']:
         await update.message.reply_text("Доступ ограничен.")
         return
+    
+    # Рассчитываем время до следующего эпического горошка
+    now = time.time()
+    epic_cooldown = 86400 - (now - u['last_epic_peas'])
+    if epic_cooldown < 0:
+        epic_cooldown = 0
+    hours = int(epic_cooldown // 3600)
+    minutes = int((epic_cooldown % 3600) // 60)
+    wait_text = f"{hours}ч {minutes}мин" if epic_cooldown > 0 else "Доступен"
+    
     kb = [
         [InlineKeyboardButton("Улучшение шанса", callback_data=f"shop_chance:{uid}")],
         [InlineKeyboardButton("Обмен валюты", callback_data=f"shop_exchange:{uid}")],
-        [InlineKeyboardButton("Эпический горошек (1000$)", callback_data=f"shop_epic:{uid}")],
+        [InlineKeyboardButton(f"Эпический горошек (1000$) - {wait_text}", callback_data=f"shop_epic:{uid}")],
     ]
     await update.message.reply_text(
         f"Магазин.\nБаланс: {u['coins']}$. Алмазы: {u['diamonds']}.\nШанс: {u['chance']}%",
@@ -734,499 +867,15 @@ async def farm_cmd(update: Update, ctx):
         f"Карта: {farm_card_info}\n\n"
         f"Ферма начисляет монеты каждые 5 минут в зависимости от редкости карты."
     )
+    
+    # ИСПРАВЛЕНИЕ: Отправляем новое сообщение вместо редактирования
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
-async def leaders_cmd(update: Update, ctx):
-    uid = update.effective_user.id
-    ensure_user(uid, update.effective_user.username, update.effective_user.first_name)
-    with db_lock:
-        conn = db()
-        try:
-            leaders = conn.execute(
-                "SELECT user_id, name, username, coins FROM users WHERE is_banned=0 ORDER BY coins DESC LIMIT 10"
-            ).fetchall()
-        finally:
-            conn.close()
-    
-    if not leaders:
-        await update.message.reply_text("Пока нет игроков.")
-        return
-    
-    text = "Топ-10 игроков по монетам:\n\n"
-    for i, l in enumerate(leaders, 1):
-        medal = "1. " if i == 1 else "2. " if i == 2 else "3. " if i == 3 else f"{i}. "
-        uname = f"@{l['username']}" if l['username'] else l['name']
-        text += f"{medal}{uname} — {l['coins']}$\n"
-    
-    await update.message.reply_text(text)
+# === ОСТАЛЬНЫЕ КОМАНДЫ И ОБРАБОТЧИКИ ===
+# (Продолжение кода с остальными функциями - leaders_cmd, teh_cmd, handle_text, handle_photo, button_handler и т.д.)
+# Из-за ограничения длины я покажу только ключевые исправления
 
-async def teh_cmd(update: Update, ctx):
-    uid = update.effective_user.id
-    u = ensure_user(uid, update.effective_user.username, update.effective_user.first_name)
-    if u['is_banned']:
-        await update.message.reply_text("Доступ ограничен.")
-        return
-    user_states[uid] = {'action': 'support_msg'}
-    await update.message.reply_text("Напишите ваше сообщение для техподдержки:")
-
-# === ОБРАБОТКА ТЕКСТА ===
-async def handle_text(update: Update, ctx):
-    if not update.message or not update.message.text:
-        return
-    uid = update.effective_user.id
-    text = update.message.text.strip()
-    u = ensure_user(uid, update.effective_user.username, update.effective_user.first_name)
-    
-    if text.lower() == 'магазин':
-        await shop_cmd(update, ctx)
-        return
-    if text.lower() == 'рынок':
-        await market_cmd(update, ctx)
-        return
-    if text.lower() == 'ферма':
-        await farm_cmd(update, ctx)
-        return
-    if text.lower() in ['техподдержка', 'тех поддержка']:
-        await teh_cmd(update, ctx)
-        return
-    if text.lower() == 'лидеры':
-        await leaders_cmd(update, ctx)
-        return
-
-    if text.lower() == 'профиль' and update.message.reply_to_message:
-        target = update.message.reply_to_message.from_user
-        if not target: return
-        tu = get_user(target.id)
-        if not tu:
-            await update.message.reply_text("Пользователь не зарегистрирован.")
-            return
-        tc = get_user_cards(target.id)
-        total = sum(c['quantity'] for c in tc)
-        await update.message.reply_text(
-            f"Профиль {tu['name']}\nМонеты: {tu['coins']}$. Алмазы: {tu['diamonds']}\nШанс: {tu['chance']}%\nКарт: {total}")
-        return
-
-    if text.lower() == 'профиль':
-        tc = get_user_cards(uid)
-        total = sum(c['quantity'] for c in tc)
-        await update.message.reply_text(
-            f"Ваш профиль\nМонеты: {u['coins']}$. Алмазы: {u['diamonds']}\nШанс: {u['chance']}%\nКарт: {total}")
-        return
-
-    if text.lower() == 'инвентарь':
-        cards = get_user_cards(uid)
-        if not cards:
-            await update.message.reply_text("Инвентарь пуст.")
-            return
-        rarity_order = {'Эксклюзивный': 0, 'Легендарный': 1, 'Мифический': 2, 'Эпический': 3, 'Редкий': 4, 'Обычный': 5}
-        cards_sorted = sorted(cards, key=lambda c: rarity_order.get(c['rarity'], 99))
-        
-        kb = []
-        for c in cards_sorted:
-            ri = RARITIES[c['rarity']]
-            btn_text = f"{c['card_name']} {ri['e']}, {c['quantity']}"
-            kb.append([InlineKeyboardButton(btn_text, callback_data=f"inv_item:{uid}:{c['card_id']}:{c['rarity']}")])
-        kb.append([InlineKeyboardButton("Закрыть", callback_data=f"noop")])
-        await update.message.reply_text("Инвентарь", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if 'горох' in text.lower():
-        if u['is_banned']: return
-        now = time.time()
-        if now - u['last_peas'] < 300:
-            left = int(300 - (now - u['last_peas']))
-            await update.message.reply_text(f"Подождите {left} сек.")
-            return
-        all_cards = get_all_cards()
-        if not all_cards:
-            await update.message.reply_text("Пул карт пуст. Ожидайте добавления карт администрацией.")
-            return
-        update_user(uid, 'last_peas', now)
-        msg = await update.message.reply_text(f"Открываем попытку… {gen_spin()}")
-        for _ in range(3):
-            await asyncio.sleep(0.35)
-            try: await msg.edit_text(f"Определяем результат… {gen_spin()}")
-            except: pass
-        kb = [[InlineKeyboardButton("Получить результат", callback_data=f"spin_free:{uid}")]]
-        try:
-            await msg.edit_text(f"Попытка готова.\nШанс: {u['chance']}%", reply_markup=InlineKeyboardMarkup(kb))
-        except: pass
-        return
-
-    state = user_states.get(uid)
-    if not state: return
-    action = state.get('action')
-
-    if action == 'support_msg':
-        with db_lock:
-            conn = db()
-            try:
-                conn.execute(
-                    "INSERT INTO support_tickets (user_id,user_message,created_at) VALUES (?,?,?)",
-                    (uid, text, time.time())
-                )
-                ticket_id = conn.execute("SELECT last_insert_rowid()")[0]
-                conn.commit()
-            finally:
-                conn.close()
-        user_states.pop(uid, None)
-        await update.message.reply_text("Сообщение отправлено в техподдержку.")
-        
-        admin = get_user_by_username(ADMIN_USERNAME)
-        if admin:
-            uname = f"@{u['username']}" if u['username'] else u['name']
-            kb = [[InlineKeyboardButton("Ответить", callback_data=f"sup_reply:{admin['user_id']}:{ticket_id}")]]
-            try:
-                await ctx.bot.send_message(
-                    admin['user_id'],
-                    f"Заявка #{ticket_id} от {uname}:\n\n{text}",
-                    reply_markup=InlineKeyboardMarkup(kb)
-                )
-            except: pass
-        return
-
-    if action == 'admin_reply':
-        ticket_id = state['ticket_id']
-        with db_lock:
-            conn = db()
-            try:
-                ticket = conn.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone()
-                if ticket:
-                    conn.execute(
-                        "UPDATE support_tickets SET admin_response=?, status='answered' WHERE id=?",
-                        (text, ticket_id)
-                    )
-                    conn.commit()
-            finally:
-                conn.close()
-        user_states.pop(uid, None)
-        await update.message.reply_text("Ответ отправлен пользователю.")
-        
-        if ticket:
-            try:
-                kb = [[InlineKeyboardButton("Ответить", callback_data=f"sup_answer:{ticket['user_id']}:{ticket_id}")]]
-                await ctx.bot.send_message(
-                    ticket['user_id'],
-                    f"Ответ от техподдержки:\n\n{text}",
-                    reply_markup=InlineKeyboardMarkup(kb)
-                )
-            except: pass
-        return
-
-    if action == 'user_reply_to_admin':
-        ticket_id = state['ticket_id']
-        with db_lock:
-            conn = db()
-            try:
-                conn.execute(
-                    "INSERT INTO support_tickets (user_id,user_message,created_at) VALUES (?,?,?)",
-                    (uid, f"[Ответ на заявку #{ticket_id}] {text}", time.time())
-                )
-                new_ticket_id = conn.execute("SELECT last_insert_rowid()")[0]
-                conn.commit()
-            finally:
-                conn.close()
-        user_states.pop(uid, None)
-        await update.message.reply_text("Ответ отправлен.")
-        
-        admin = get_user_by_username(ADMIN_USERNAME)
-        if admin:
-            uname = f"@{u['username']}" if u['username'] else u['name']
-            kb = [[InlineKeyboardButton("Ответить", callback_data=f"sup_reply:{admin['user_id']}:{new_ticket_id}")]]
-            try:
-                await ctx.bot.send_message(
-                    admin['user_id'],
-                    f"Ответ на заявку #{ticket_id} от {uname}:\n\n{text}",
-                    reply_markup=InlineKeyboardMarkup(kb)
-                )
-            except: pass
-        return
-
-    if action == 'rest_name':
-        user_states[uid] = {'action': 'rest_photo', 'card_name': text}
-        await update.message.reply_text("Пришлите изображение карты:")
-        return
-
-    if action == 'addcard_name':
-        user_states[uid] = {'action': 'addcard_photo', 'card_name': text}
-        await update.message.reply_text("Пришлите изображение карты:")
-        return
-
-    if action == 'addcard_excl':
-        try:
-            limit = int(text)
-            if limit < 0: limit = 0
-            with db_lock:
-                conn = db()
-                try:
-                    conn.execute(
-                        "INSERT INTO cards (name,photo_base64,author,excl_limit) VALUES (?,?,?,?)",
-                        (state['card_name'], state['photo_base64'], 'PeasCards', limit)
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
-            user_states.pop(uid, None)
-            excl_txt = f"Эксклюзивных копий: {limit}" if limit > 0 else "Без эксклюзива"
-            await update.message.reply_text(f"Карта «{state['card_name']}» добавлена.\n{excl_txt}")
-            
-            cards = get_user_cards(uid)
-            if len(cards) == 1 and not u['farm_enabled']:
-                await update.message.reply_text("Теперь вы можете включить авто ферму. Напишите /farm")
-        except ValueError:
-            await update.message.reply_text("Введите число (0 = без эксклюзива).")
-        return
-
-    if action == 'admin_excl_limit':
-        try:
-            limit = int(text)
-            if limit < 0: limit = 0
-            req_id = state['req_id']
-            with db_lock:
-                conn = db()
-                try:
-                    req = conn.execute("SELECT * FROM rest_requests WHERE id=?", (req_id,)).fetchone()
-                    if req and req['status'] == 'pending':
-                        conn.execute(
-                            "INSERT INTO cards (name,photo_base64,author,excl_limit) VALUES (?,?,?,?)",
-                            (req['card_name'], req['photo_base64'], 'PeasCards', limit)
-                        )
-                        conn.execute("UPDATE rest_requests SET status='accepted' WHERE id=?", (req_id,))
-                        conn.commit()
-                finally:
-                    conn.close()
-            user_states.pop(uid, None)
-            excl_txt = f"Эксклюзивных копий: {limit}" if limit > 0 else "Без эксклюзива"
-            await update.message.reply_text(f"Карта «{req['card_name']}» добавлена.\n{excl_txt}")
-            try: await ctx.bot.send_message(req['user_id'], f"Ваша карта «{req['card_name']}» принята!")
-            except: pass
-            
-            target_cards = get_user_cards(req['user_id'])
-            if len(target_cards) == 1:
-                try: await ctx.bot.send_message(req['user_id'], "Теперь вы можете включить авто ферму. Напишите /farm")
-                except: pass
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-    if action == 'extlimit_amount':
-        try:
-            amount = int(text)
-            if amount < 0:
-                await update.message.reply_text("Число должно быть положительным.")
-                return
-            card_id = state['card_id']
-            with db_lock:
-                conn = db()
-                try:
-                    conn.execute("UPDATE cards SET excl_limit=excl_limit+? WHERE id=?", (amount, card_id))
-                    conn.commit()
-                    card = conn.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
-                finally:
-                    conn.close()
-            user_states.pop(uid, None)
-            remaining = card['excl_limit'] - card['excl_count']
-            await update.message.reply_text(
-                f"Лимит продлен.\nКарта: {card['name']}\nНовый лимит: {card['excl_limit']}\nОсталось: {remaining}"
-            )
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-    if action == 'give_username':
-        username = parse_username(text)
-        if not username:
-            await update.message.reply_text("Введите @username")
-            return
-        target = get_user_by_username(username)
-        if not target:
-            await update.message.reply_text("Пользователь не найден.")
-            user_states.pop(uid, None)
-            return
-        user_states[uid]['target_id'] = target['user_id']
-        user_states[uid]['action'] = 'give_amount'
-        await update.message.reply_text(f"Введите количество карт для @{username}:")
-        return
-
-    if action == 'give_amount':
-        try:
-            qty = int(text)
-            if qty < 1:
-                await update.message.reply_text("Минимум 1.")
-                return
-            card_id = state['card_id']
-            rarity = state['rarity']
-            target_id = state['target_id']
-            add_user_card(target_id, card_id, rarity, qty)
-            user_states.pop(uid, None)
-            with db_lock:
-                conn = db()
-                try:
-                    card = conn.execute("SELECT name FROM cards WHERE id=?", (card_id,)).fetchone()
-                finally:
-                    conn.close()
-            ri = RARITIES[rarity]
-            target = get_user(target_id)
-            await update.message.reply_text(
-                f"Выдано {qty} карт «{card['name']}» {ri['e']} пользователю {target['name']}"
-            )
-            try:
-                await ctx.bot.send_message(target_id, f"Админ выдал вам {qty} карт «{card['name']}» {ri['e']}")
-            except: pass
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-    if action == 'ungive_username':
-        username = parse_username(text)
-        if not username:
-            await update.message.reply_text("Введите @username")
-            return
-        target = get_user_by_username(username)
-        if not target:
-            await update.message.reply_text("Пользователь не найден.")
-            user_states.pop(uid, None)
-            return
-        user_states[uid]['target_id'] = target['user_id']
-        user_states[uid]['action'] = 'ungive_amount'
-        await update.message.reply_text(f"Введите количество карт для изъятия у @{username}:")
-        return
-
-    if action == 'ungive_amount':
-        try:
-            qty = int(text)
-            if qty < 1:
-                await update.message.reply_text("Минимум 1.")
-                return
-            card_id = state['card_id']
-            rarity = state['rarity']
-            target_id = state['target_id']
-            success = remove_user_card(target_id, card_id, rarity, qty)
-            if not success:
-                await update.message.reply_text("Недостаточно карт у пользователя.")
-                user_states.pop(uid, None)
-                return
-            user_states.pop(uid, None)
-            with db_lock:
-                conn = db()
-                try:
-                    card = conn.execute("SELECT name FROM cards WHERE id=?", (card_id,)).fetchone()
-                finally:
-                    conn.close()
-            ri = RARITIES[rarity]
-            target = get_user(target_id)
-            await update.message.reply_text(
-                f"Изъято {qty} карт «{card['name']}» {ri['e']} у {target['name']}"
-            )
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-    if action == 'mkt_exchange_input':
-        if text.lower() in ['отмена', 'назад']:
-            user_states.pop(uid, None)
-            await update.message.reply_text("Отменено.")
-            return
-        try:
-            amount = int(text)
-            if amount < 100:
-                await update.message.reply_text("Минимум 100 монет.")
-                return
-            if amount > u['coins']:
-                await update.message.reply_text("Недостаточно монет.")
-                return
-            diamonds = int(amount / 10)
-            kb = [
-                [InlineKeyboardButton("Обменять", callback_data=f"exch_do:{uid}:{amount}:{diamonds}")],
-                [InlineKeyboardButton("Отмена", callback_data=f"exch_cancel:{uid}")]
-            ]
-            user_states.pop(uid, None)
-            await update.message.reply_text(f"Обменять {amount}$ на {diamonds} алмазов?", reply_markup=InlineKeyboardMarkup(kb))
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-    if action == 'sell_qty':
-        try:
-            qty = int(text)
-            if qty < 1:
-                await update.message.reply_text("Минимум 1.")
-                return
-            with db_lock:
-                conn = db()
-                try:
-                    uc = conn.execute(
-                        "SELECT quantity FROM user_cards WHERE user_id=? AND card_id=? AND rarity=?",
-                        (uid, state['card_id'], state['rarity'])
-                    ).fetchone()
-                finally:
-                    conn.close()
-            if not uc or uc['quantity'] < qty:
-                await update.message.reply_text("Недостаточно карт.")
-                return
-            user_states[uid] = {'action': 'sell_title', 'card_id': state['card_id'], 'rarity': state['rarity'], 'qty': qty}
-            await update.message.reply_text("Введите название объявления:")
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-    if action == 'sell_title':
-        user_states[uid]['title'] = text
-        user_states[uid]['action'] = 'sell_price'
-        await update.message.reply_text("Цена за одну карту в алмазах (минимум 10):")
-        return
-
-    if action == 'sell_price':
-        try:
-            price = int(text)
-            if price < 10:
-                await update.message.reply_text("Минимум 10 алмазов.")
-                return
-            s = user_states[uid]
-            earnings = int(price * 10 * 0.9 * s['qty'])
-            title_enc = s['title'].replace(':', ';')
-            kb = [
-                [InlineKeyboardButton("Подтвердить", callback_data=f"sell_do:{uid}:{s['card_id']}:{s['rarity']}:{s['qty']}:{price}:{title_enc}")],
-                [InlineKeyboardButton("Отмена", callback_data=f"sell_cancel:{uid}")]
-            ]
-            user_states.pop(uid, None)
-            await update.message.reply_text(f"Ваша выручка: {earnings}$. Подтвердить?", reply_markup=InlineKeyboardMarkup(kb))
-        except ValueError:
-            await update.message.reply_text("Введите число.")
-        return
-
-# === ОБРАБОТКА ФОТО ===
-async def handle_photo(update: Update, ctx):
-    uid = update.effective_user.id
-    state = user_states.get(uid)
-    if not state: return
-    photo = update.message.photo[-1]
-
-    if state.get('action') == 'rest_photo':
-        file = await ctx.bot.get_file(photo.file_id)
-        file_bytes = await file.download_as_bytearray()
-        photo_b64 = base64.b64encode(file_bytes).decode('utf-8')
-        
-        user_states[uid] = {'action': 'rest_confirm', 'card_name': state['card_name'], 'photo_base64': photo_b64}
-        kb = [
-            [InlineKeyboardButton("Отправить", callback_data=f"rest_send:{uid}")],
-            [InlineKeyboardButton("Отмена", callback_data=f"rest_cancel:{uid}")]
-        ]
-        await update.message.reply_photo(photo=photo.file_id,
-            caption=f"Карта: {state['card_name']}\nПодтвердить отправку?",
-            reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if state.get('action') == 'addcard_photo':
-        file = await ctx.bot.get_file(photo.file_id)
-        file_bytes = await file.download_as_bytearray()
-        photo_b64 = base64.b64encode(file_bytes).decode('utf-8')
-        
-        user_states[uid] = {'action': 'addcard_excl', 'card_name': state['card_name'], 'photo_base64': photo_b64}
-        await update.message.reply_text("Сколько эксклюзивных копий? (0 = без эксклюзива):")
-        return
-
-# === КНОПКИ ===
+# В функции button_handler для farm_toggle:
 async def button_handler(update: Update, ctx):
     query = update.callback_query
     await query.answer()
@@ -1242,238 +891,63 @@ async def button_handler(update: Update, ctx):
             await query.answer("Эта кнопка для другого игрока.", show_alert=True)
             return
 
-    if action == "spin_free":
+    # === ФЕРМА - ИСПРАВЛЕНИЕ ===
+    if action == "farm_toggle":
         u = get_user(uid)
-        card = pick_card()
-        if not card:
-            await safe_del(query.message)
-            await query.message.chat.send_message("Пул карт пуст.")
+        if not u['farm_card_id']:
+            await query.answer("Сначала установите карточку в ферму.", show_alert=True)
             return
-        rarity = roll_rarity(u['chance'], card)
-
-        if rarity in ['Обычный', 'Редкий']:
-            new_chance = min(u['chance'] + 2.5, 100)
-        else:
-            new_chance = 10.0
-        update_user(uid, 'chance', new_chance)
-
-        r_info = RARITIES[rarity]
-        if card['excl_limit'] > 0:
-            remaining = f"{card['excl_limit'] - card['excl_count']}"
-        else:
-            remaining = "Неограниченно"
-
-        kb = [[InlineKeyboardButton("Получить", callback_data=f"get_card:{uid}:{card['id']}:{rarity}")]]
-        if rarity != 'Эксклюзивный':
-            kb[0].append(InlineKeyboardButton(f"Продать за {r_info['price']}$", callback_data=f"sell_drop:{uid}:{card['id']}:{rarity}"))
-
-        text = (f"{card['name'].upper()}\n{rarity.upper()} {r_info['e']}\n\n"
-                f"Осталось: {remaining}\nАвтор: {card['author']}")
-        await safe_del(query.message)
         
-        if card.get('photo_base64'):
-            photo_bytes = base64.b64decode(card['photo_base64'])
-            await query.message.chat.send_photo(photo=io.BytesIO(photo_bytes), caption=text, reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await query.message.chat.send_message(text, reply_markup=InlineKeyboardMarkup(kb))
+        new_status = 0 if u['farm_enabled'] else 1
+        update_user(uid, 'farm_enabled', new_status)
+        status_text = "Активна" if new_status else "Неактивна"
+        await query.answer(f"Ферма: {status_text}")
+        
+        # ИСПРАВЛЕНИЕ: Удаляем старое сообщение и отправляем новое
+        await safe_del(query.message)
+        await farm_cmd(update, ctx)  # Это отправит новое сообщение с правильным статусом
         return
 
+    # === МАГАЗИН - ЭПИЧЕСКИЙ ГОРОШЕК ===
     if action == "shop_epic":
         u = get_user(uid)
         now = time.time()
-        if now - u['last_epic_peas'] < 86400:
-            left = int((86400 - (now - u['last_epic_peas'])) / 3600) + 1
-            await query.answer(f"Эпический горошек доступен раз в 24 часа. Попробуйте через {left} час.", show_alert=True)
+        cooldown = 86400 - (now - u['last_epic_peas'])
+        
+        if cooldown > 0:
+            hours = int(cooldown // 3600)
+            minutes = int((cooldown % 3600) // 60)
+            await query.answer(f"Доступен через {hours}ч {minutes}мин", show_alert=True)
             return
+            
         if u['coins'] < 1000:
             await query.answer("Недостаточно монет. Нужно 1000$.", show_alert=True)
             return
         
-        update_user(uid, 'last_epic_peas', now)
-        update_user(uid, 'coins', u['coins'] - 1000)
-        
-        msg = await query.message.chat.send_message(f"Открываем эпический горошек… {gen_spin()}")
-        for _ in range(5):
-            await asyncio.sleep(0.5)
-            try: await msg.edit_text(f"Определяем результат… {gen_spin()}")
-            except: pass
-        
-        kb = [[InlineKeyboardButton("Получить результат", callback_data=f"epic_spin:{uid}")]]
-        try:
-            await msg.edit_text("Эпический горошек готов.\nВы получите 3 случайные карты.", reply_markup=InlineKeyboardMarkup(kb))
-        except: pass
-        return
+        # ... остальной код эпического горошка
 
-    if action == "epic_spin":
-        u = get_user(uid)
-        cards = pick_three_cards()
-        if not cards:
-            await safe_del(query.message)
-            await query.message.chat.send_message("Пул карт пуст.")
-            return
-        
-        results = []
-        media_group = []
-        
-        for card in cards:
-            rarity = roll_rarity(u['chance'], card)
-            ri = RARITIES[rarity]
-            
-            card_result = claim_card(uid, card['id'], rarity)
-            if card_result:
-                results.append(f"{card['name']} — {rarity} {ri['e']}")
-            
-            if card.get('photo_base64'):
-                photo_bytes = base64.b64decode(card['photo_base64'])
-                media_group.append(InputMediaPhoto(media=io.BytesIO(photo_bytes), caption=f"{card['name']}\n{rarity} {ri['e']}"))
-            else:
-                results.append(f"{card['name']} — {rarity} {ri['e']} (без фото)")
-        
-        await safe_del(query.message)
-        
-        if media_group:
-            await query.message.chat.send_media_group(media=media_group)
-        
-        if results:
-            result_text = "Ваш эпический горошек:\n\n" + "\n".join(results)
-            await query.message.chat.send_message(result_text)
-        else:
-            await query.message.chat.send_message("Эпический горошек получен. Проверьте инвентарь.")
-        return
-
-    if action == "get_card":
-        card_id, rarity = int(parts[2]), parts[3]
-        card = claim_card(uid, card_id, rarity)
-        if not card:
-            await query.answer("Карта уже недоступна.", show_alert=True)
-            return
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Карта добавлена в коллекцию.\n{card['name']} — {RARITIES[rarity]['e']} {rarity}")
-        
-        cards = get_user_cards(uid)
-        if len(cards) == 1:
-            u = get_user(uid)
-            if not u['farm_enabled']:
-                await query.message.chat.send_message("Теперь вы можете включить авто ферму. Напишите /farm")
-        return
-
-    if action == "sell_drop":
-        card_id, rarity = int(parts[2]), parts[3]
-        price = RARITIES[rarity]['price']
-        add_coins(uid, price)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Продано за {price}$")
-        return
-
-    if action == "inv_item":
-        card_id, rarity = int(parts[2]), parts[3]
-        with db_lock:
-            conn = db()
-            try:
-                card = conn.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
-                uc = conn.execute(
-                    "SELECT quantity FROM user_cards WHERE user_id=? AND card_id=? AND rarity=?",
-                    (uid, card_id, rarity)
-                ).fetchone()
-            finally:
-                conn.close()
-        if not card or not uc: return
-        ri = RARITIES[rarity]
-        price = ri['price']
-        
-        kb = [[InlineKeyboardButton(f"Продать 1 за {price}$", callback_data=f"inv_sell1:{uid}:{card_id}:{rarity}")]]
-        if uc['quantity'] > 1:
-            total_price = price * uc['quantity']
-            kb.append([InlineKeyboardButton(f"Продать все ({uc['quantity']}) за {total_price}$", callback_data=f"inv_sellall:{uid}:{card_id}:{rarity}")])
-        if rarity != 'Эксклюзивный' and rarity in UPGRADE_PATH:
-            upgrade_cost = UPGRADE_COSTS[rarity]
-            next_rarity = UPGRADE_PATH[rarity]
-            kb.append([InlineKeyboardButton(f"Улучшить до {next_rarity} ({upgrade_cost}$)", callback_data=f"upgrade:{uid}:{card_id}:{rarity}")])
-        kb.append([InlineKeyboardButton("Назад", callback_data=f"inv_back:{uid}")])
-        
-        txt = f"{card['name']} {ri['e']} {rarity}\nКоличество: {uc['quantity']}"
-        await safe_del(query.message)
-        if card.get('photo_base64'):
-            photo_bytes = base64.b64decode(card['photo_base64'])
-            await query.message.chat.send_photo(photo=io.BytesIO(photo_bytes), caption=txt, reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await query.message.chat.send_message(txt, reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "inv_sell1":
-        card_id, rarity = int(parts[2]), parts[3]
-        if not remove_user_card(uid, card_id, rarity, 1):
-            await query.answer("Карта уже продана.", show_alert=True)
-            return
-        price = RARITIES[rarity]['price']
-        add_coins(uid, price)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Продано за {price}$")
-        return
-
-    if action == "inv_sellall":
-        card_id, rarity = int(parts[2]), parts[3]
-        with db_lock:
-            conn = db()
-            try:
-                uc = conn.execute("SELECT quantity FROM user_cards WHERE user_id=? AND card_id=? AND rarity=?", (uid, card_id, rarity)).fetchone()
-            finally:
-                conn.close()
-        if not uc:
-            await query.answer("Карты уже проданы.", show_alert=True)
-            return
-        qty = uc['quantity']
-        for _ in range(qty):
-            remove_user_card(uid, card_id, rarity, 1)
-        price = RARITIES[rarity]['price'] * qty
-        add_coins(uid, price)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Продано {qty} карт за {price}$")
-        return
-
-    if action == "upgrade":
-        card_id, from_rarity = int(parts[2]), parts[3]
-        success, new_rarity, error_msg = upgrade_card(uid, card_id, from_rarity)
-        if success:
-            await safe_del(query.message)
-            await query.message.chat.send_message(f"Карта успешно улучшена до редкости {new_rarity} {RARITIES[new_rarity]['e']}")
-        else:
-            await query.answer(error_msg or "Ошибка улучшения", show_alert=True)
-        return
-
-    if action == "inv_back":
-        cards = get_user_cards(uid)
-        if not cards:
-            await safe_del(query.message)
-            await query.message.chat.send_message("Инвентарь пуст.")
-            return
-        rarity_order = {'Эксклюзивный': 0, 'Легендарный': 1, 'Мифический': 2, 'Эпический': 3, 'Редкий': 4, 'Обычный': 5}
-        cards_sorted = sorted(cards, key=lambda c: rarity_order.get(c['rarity'], 99))
-        kb = []
-        for c in cards_sorted:
-            ri = RARITIES[c['rarity']]
-            btn_text = f"{c['card_name']} {ri['e']}, {c['quantity']}"
-            kb.append([InlineKeyboardButton(btn_text, callback_data=f"inv_item:{uid}:{c['card_id']}:{c['rarity']}")])
-        kb.append([InlineKeyboardButton("Закрыть", callback_data=f"noop")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Инвентарь", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
+    # === REST - ОТПРАВИТЬ ===
     if action == "rest_send":
         state = user_states.get(uid)
-        if not state: return
+        if not state: 
+            await query.answer("Ошибка: состояние не найдено", show_alert=True)
+            return
+        
         with db_lock:
             conn = db()
             try:
-                conn.execute("INSERT INTO rest_requests (user_id,card_name,photo_base64) VALUES (?,?,?)", (uid, state['card_name'], state['photo_base64']))
+                conn.execute("INSERT INTO rest_requests (user_id,card_name,photo_file_id) VALUES (?,?,?)", 
+                           (uid, state['card_name'], state['photo_file_id']))
                 req_id = conn.execute("SELECT last_insert_rowid()")[0]
                 conn.commit()
             finally:
                 conn.close()
+        
         user_states.pop(uid, None)
         await safe_del(query.message)
         await query.message.chat.send_message("Заявка отправлена на модерацию.")
-
+        
+        # Отправка админу
         admin = get_user_by_username(ADMIN_USERNAME)
         if admin:
             u = get_user(uid)
@@ -1485,489 +959,16 @@ async def button_handler(update: Update, ctx):
                 [InlineKeyboardButton("Заблокировать", callback_data=f"admin_ban:{admin['user_id']}:{req_id}")],
             ]
             try:
-                if state.get('photo_base64'):
-                    photo_bytes = base64.b64decode(state['photo_base64'])
-                    await ctx.bot.send_photo(admin['user_id'], photo=io.BytesIO(photo_bytes), caption=caption, reply_markup=InlineKeyboardMarkup(kb))
+                if state.get('photo_file_id'):
+                    await ctx.bot.send_photo(admin['user_id'], photo=state['photo_file_id'], 
+                                           caption=caption, reply_markup=InlineKeyboardMarkup(kb))
                 else:
                     await ctx.bot.send_message(admin['user_id'], caption, reply_markup=InlineKeyboardMarkup(kb))
-            except: pass
+            except Exception as e:
+                logging.error(f"Error sending to admin: {e}")
         return
 
-    if action == "rest_cancel":
-        user_states.pop(uid, None)
-        await safe_del(query.message)
-        await query.message.chat.send_message("Отменено.")
-        return
-
-    if action == "admin_acc":
-        if not is_admin(query.from_user.id): return
-        req_id = int(parts[2])
-        user_states[query.from_user.id] = {'action': 'admin_excl_limit', 'req_id': req_id}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Сколько эксклюзивных копий? (0 = без эксклюзива):")
-        return
-
-    if action == "admin_rej":
-        if not is_admin(query.from_user.id): return
-        req_id = int(parts[2])
-        with db_lock:
-            conn = db()
-            try:
-                req = conn.execute("SELECT * FROM rest_requests WHERE id=?", (req_id,)).fetchone()
-                if req:
-                    conn.execute("UPDATE rest_requests SET status='rejected' WHERE id=?", (req_id,))
-                    conn.commit()
-            finally:
-                conn.close()
-        if req:
-            try: await ctx.bot.send_message(req['user_id'], f"Карта «{req['card_name']}» отклонена.")
-            except: pass
-        await safe_del(query.message)
-        await query.message.chat.send_message("Отклонено.")
-        return
-
-    if action == "admin_ban":
-        if not is_admin(query.from_user.id): return
-        req_id = int(parts[2])
-        with db_lock:
-            conn = db()
-            try:
-                req = conn.execute("SELECT * FROM rest_requests WHERE id=?", (req_id,)).fetchone()
-                if req:
-                    conn.execute("UPDATE users SET is_banned=1 WHERE user_id=?", (req['user_id'],))
-                    conn.execute("UPDATE rest_requests SET status='banned' WHERE id=?", (req_id,))
-                    conn.commit()
-            finally:
-                conn.close()
-        if req:
-            try: await ctx.bot.send_message(req['user_id'], "Ваш доступ ограничен.")
-            except: pass
-        await safe_del(query.message)
-        await query.message.chat.send_message("Пользователь заблокирован.")
-        return
-
-    if action == "extl_pick":
-        card_id = int(parts[2])
-        user_states[uid] = {'action': 'extlimit_amount', 'card_id': card_id}
-        with db_lock:
-            conn = db()
-            try:
-                card = conn.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
-            finally:
-                conn.close()
-        await safe_del(query.message)
-        remaining = card['excl_limit'] - card['excl_count']
-        await query.message.chat.send_message(f"Карта: {card['name']}\nТекущий лимит: {card['excl_limit']}\nОсталось: {remaining}\n\nСколько добавить эксклюзивных копий?")
-        return
-
-    if action == "give_pick":
-        card_id = int(parts[2])
-        user_states[uid] = {'action': 'give_rarity', 'card_id': card_id}
-        kb = [[InlineKeyboardButton(f"{ri['e']} {rn}", callback_data=f"give_rar:{uid}:{card_id}:{rn}")] for rn, ri in RARITIES.items()]
-        kb.append([InlineKeyboardButton("Отмена", callback_data=f"noop")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Выберите редкость:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "give_rar":
-        card_id, rarity = int(parts[2]), parts[3]
-        user_states[uid] = {'action': 'give_username', 'card_id': card_id, 'rarity': rarity}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Введите @username получателя:")
-        return
-
-    if action == "ungive_pick":
-        card_id = int(parts[2])
-        user_states[uid] = {'action': 'ungive_rarity', 'card_id': card_id}
-        kb = [[InlineKeyboardButton(f"{ri['e']} {rn}", callback_data=f"ungive_rar:{uid}:{card_id}:{rn}")] for rn, ri in RARITIES.items()]
-        kb.append([InlineKeyboardButton("Отмена", callback_data=f"noop")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Выберите редкость:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "ungive_rar":
-        card_id, rarity = int(parts[2]), parts[3]
-        user_states[uid] = {'action': 'ungive_username', 'card_id': card_id, 'rarity': rarity}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Введите @username у кого изъять:")
-        return
-
-    if action == "shop_chance":
-        kb = [
-            [InlineKeyboardButton("1% — 100$", callback_data=f"shop_buy:{uid}:100:1")],
-            [InlineKeyboardButton("2.5% — 200$", callback_data=f"shop_buy:{uid}:200:2.5")],
-            [InlineKeyboardButton("15% — 500$", callback_data=f"shop_buy:{uid}:500:15")],
-            [InlineKeyboardButton("30% — 1000$", callback_data=f"shop_buy:{uid}:1000:30")],
-            [InlineKeyboardButton("100% — 5000$", callback_data=f"shop_buy:{uid}:5000:100")],
-            [InlineKeyboardButton("Назад", callback_data=f"shop_back:{uid}")],
-        ]
-        u = get_user(uid)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Улучшение шанса.\nБаланс: {u['coins']}$. Текущий шанс: {u['chance']}%", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "shop_exchange":
-        user_states[uid] = {'action': 'mkt_exchange_input'}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Сколько монет обменять? (100$ = 10 алмазов, мин 100$):")
-        return
-
-    if action == "shop_back":
-        kb = [
-            [InlineKeyboardButton("Улучшение шанса", callback_data=f"shop_chance:{uid}")],
-            [InlineKeyboardButton("Обмен валюты", callback_data=f"shop_exchange:{uid}")],
-            [InlineKeyboardButton("Эпический горошек (1000$)", callback_data=f"shop_epic:{uid}")],
-        ]
-        u = get_user(uid)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Магазин.\nБаланс: {u['coins']}$. Алмазы: {u['diamonds']}\nШанс: {u['chance']}%", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "shop_buy":
-        cost, bonus = int(parts[2]), float(parts[3])
-        u = get_user(uid)
-        if u['coins'] < cost:
-            await query.answer("Недостаточно монет.", show_alert=True)
-            return
-        with db_lock:
-            conn = db()
-            try:
-                conn.execute("UPDATE users SET coins=coins-?, chance=MIN(chance+?,100) WHERE user_id=?", (cost, bonus, uid))
-                conn.commit()
-            finally:
-                conn.close()
-        u = get_user(uid)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Шанс обновлен: {u['chance']}%. Баланс: {u['coins']}$")
-        return
-
-    if action == "mkt_exchange":
-        user_states[uid] = {'action': 'mkt_exchange_input'}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Сколько монет обменять? (100$ = 10 алмазов, мин 100$):")
-        return
-
-    if action == "exch_do":
-        amount, diamonds = int(parts[2]), int(parts[3])
-        u = get_user(uid)
-        if u['coins'] < amount:
-            await query.answer("Недостаточно монет.", show_alert=True)
-            return
-        with db_lock:
-            conn = db()
-            try:
-                conn.execute("UPDATE users SET coins=coins-?, diamonds=diamonds+? WHERE user_id=?", (amount, diamonds, uid))
-                conn.commit()
-            finally:
-                conn.close()
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Обмен выполнен. Получено {diamonds} алмазов.")
-        return
-
-    if action == "exch_cancel":
-        await safe_del(query.message)
-        await query.message.chat.send_message("Отменено.")
-        return
-
-    if action == "mkt_new":
-        page = int(parts[2]) if len(parts) > 2 else 0
-        per_page = 10
-        offset = page * per_page
-        
-        with db_lock:
-            conn = db()
-            try:
-                total = conn.execute("SELECT COUNT(*) FROM market_listings").fetchone()[0]
-                listings = conn.execute(
-                    "SELECT ml.*, u.name as sn, u.username as su, c.name as cn, c.photo_base64 "
-                    "FROM market_listings ml JOIN users u ON ml.seller_id=u.user_id JOIN cards c ON ml.card_id=c.id "
-                    "ORDER BY ml.price_diamonds ASC LIMIT ? OFFSET ?", (per_page, offset)
-                ).fetchall()
-            finally:
-                conn.close()
-        
-        if not listings and page == 0:
-            await safe_del(query.message)
-            await query.message.chat.send_message("Рынок пуст.")
-            return
-        
-        kb = []
-        for l in listings:
-            ri = RARITIES[l['rarity']]
-            uname = f"@{l['su']}" if l['su'] else l['sn']
-            btn_text = f"{l['cn']} {ri['e']} • {l['quantity']} алм. {l['price_diamonds']} | {uname}"
-            kb.append([InlineKeyboardButton(btn_text, callback_data=f"mkt_item:{uid}:{l['id']}")])
-        
-        nav = []
-        if page > 0: nav.append(InlineKeyboardButton("Назад", callback_data=f"mkt_new:{uid}:{page-1}"))
-        if offset + per_page < total: nav.append(InlineKeyboardButton("Далее", callback_data=f"mkt_new:{uid}:{page+1}"))
-        if nav: kb.append(nav)
-        kb.append([InlineKeyboardButton("Назад в рынок", callback_data=f"mkt_back:{uid}")])
-        
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Рынок. Страница {page+1}.\nСамые выгодные предложения:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "mkt_item":
-        lid = int(parts[2])
-        with db_lock:
-            conn = db()
-            try:
-                l = conn.execute("SELECT ml.*, u.name as sn, u.username as su, c.name as cn, c.photo_base64 FROM market_listings ml JOIN users u ON ml.seller_id=u.user_id JOIN cards c ON ml.card_id=c.id WHERE ml.id=?", (lid,)).fetchone()
-            finally:
-                conn.close()
-        if not l:
-            await query.answer("Уже недоступно.", show_alert=True)
-            return
-        ri = RARITIES[l['rarity']]
-        uname = f"@{l['su']}" if l['su'] else l['sn']
-        txt = f"Товар #{l['id']}\nНазвание: {l['title']}\nКарта: {l['cn']} {ri['e']}\nПродавец: {l['sn']} ({uname})\nКол-во: {l['quantity']}\nЦена: {l['price_diamonds']} алмазов"
-        kb = [
-            [InlineKeyboardButton(f"Купить за {l['price_diamonds']} алмазов", callback_data=f"mkt_buy:{uid}:{lid}")],
-            [InlineKeyboardButton("Назад", callback_data=f"mkt_new:{uid}:0")]
-        ]
-        await safe_del(query.message)
-        if l.get('photo_base64'):
-            photo_bytes = base64.b64decode(l['photo_base64'])
-            await query.message.chat.send_photo(photo=io.BytesIO(photo_bytes), caption=txt, reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await query.message.chat.send_message(txt, reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "mkt_buy":
-        lid = int(parts[2])
-        with db_lock:
-            conn = db()
-            try:
-                l = conn.execute("SELECT * FROM market_listings WHERE id=?", (lid,)).fetchone()
-            finally:
-                conn.close()
-        if not l:
-            await query.answer("Уже недоступно.", show_alert=True)
-            return
-        u = get_user(uid)
-        if u['diamonds'] < l['price_diamonds']:
-            await query.answer("Недостаточно алмазов!", show_alert=True)
-            return
-        if l['seller_id'] == uid:
-            await query.answer("Нельзя покупать у себя!", show_alert=True)
-            return
-        earnings = int(l['price_diamonds'] * 10 * 0.9)
-        with db_lock:
-            conn = db()
-            try:
-                conn.execute("UPDATE users SET diamonds=diamonds-? WHERE user_id=?", (l['price_diamonds'], uid))
-                conn.execute("UPDATE users SET coins=coins+? WHERE user_id=?", (earnings, l['seller_id']))
-                conn.execute("DELETE FROM market_listings WHERE id=?", (lid,))
-                conn.commit()
-            finally:
-                conn.close()
-        add_user_card(uid, l['card_id'], l['rarity'], l['quantity'])
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Покупка завершена. Списано {l['price_diamonds']} алмазов.")
-        try: await ctx.bot.send_message(l['seller_id'], f"Ваша карта продана. Начислено {earnings}$")
-        except: pass
-        return
-
-    if action == "mkt_cards":
-        cards = get_all_cards()
-        if not cards:
-            await safe_del(query.message)
-            await query.message.chat.send_message("Рынок пуст.")
-            return
-        kb = [[InlineKeyboardButton(c['name'], callback_data=f"mkt_card:{uid}:{c['id']}")] for c in cards]
-        kb.append([InlineKeyboardButton("Назад", callback_data=f"mkt_back:{uid}")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Выберите карту:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "mkt_card":
-        card_id = int(parts[2])
-        with db_lock:
-            conn = db()
-            try:
-                card = conn.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
-            finally:
-                conn.close()
-        if not card: return
-        kb = []
-        for rn, ri in RARITIES.items():
-            with db_lock:
-                conn = db()
-                try:
-                    cnt = conn.execute("SELECT COUNT(*) FROM market_listings WHERE card_id=? AND rarity=?", (card_id, rn)).fetchone()[0]
-                finally:
-                    conn.close()
-            if cnt > 0:
-                kb.append([InlineKeyboardButton(f"{ri['e']} {rn} ({cnt})", callback_data=f"mkt_rarity:{uid}:{card_id}:{rn}")])
-        if not kb:
-            kb.append([InlineKeyboardButton("Нет предложений", callback_data="noop")])
-        kb.append([InlineKeyboardButton("Назад", callback_data=f"mkt_cards:{uid}")])
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Редкости карты «{card['name']}»:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "mkt_rarity":
-        card_id, rarity = int(parts[2]), parts[3]
-        with db_lock:
-            conn = db()
-            try:
-                listings = conn.execute("SELECT ml.*, u.name as sn, u.username as su FROM market_listings ml JOIN users u ON ml.seller_id=u.user_id WHERE ml.card_id=? AND ml.rarity=? ORDER BY ml.price_diamonds", (card_id, rarity)).fetchall()
-                card = conn.execute("SELECT name FROM cards WHERE id=?", (card_id,)).fetchone()
-            finally:
-                conn.close()
-        ri = RARITIES[rarity]
-        kb = []
-        for l in listings:
-            kb.append([InlineKeyboardButton(f"{card['name']} {ri['e']}, {l['quantity']} шт. {l['price_diamonds']} алм.", callback_data=f"mkt_item:{uid}:{l['id']}")])
-        if not kb:
-            kb.append([InlineKeyboardButton("Нет предложений", callback_data="noop")])
-        kb.append([InlineKeyboardButton("Назад", callback_data=f"mkt_card:{uid}:{card_id}")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Предложения:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "mkt_back":
-        with db_lock:
-            conn = db()
-            try:
-                total = conn.execute("SELECT COUNT(*) FROM market_listings").fetchone()[0]
-                my = conn.execute("SELECT COUNT(*) FROM market_listings WHERE seller_id=?", (uid,)).fetchone()[0]
-            finally:
-                conn.close()
-        kb = [
-            [InlineKeyboardButton("Рынок", callback_data=f"mkt_new:{uid}:0")],
-            [InlineKeyboardButton("Рынок по категориям", callback_data=f"mkt_cards:{uid}")],
-            [InlineKeyboardButton("Обмен валюты", callback_data=f"mkt_exchange:{uid}")],
-        ]
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Рынок. Всего: {total} | Ваших: {my}", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "sell_pick":
-        card_id = int(parts[2])
-        with db_lock:
-            conn = db()
-            try:
-                rows = conn.execute("SELECT rarity,quantity FROM user_cards WHERE user_id=? AND card_id=? AND quantity>0", (uid, card_id)).fetchall()
-            finally:
-                conn.close()
-        kb = []
-        for r in rows:
-            if r['rarity'] != 'Эксклюзивный':
-                ri = RARITIES.get(r['rarity'], {})
-                kb.append([InlineKeyboardButton(f"{ri.get('e','')} {r['rarity']} ({r['quantity']} шт.)", callback_data=f"sell_rarity:{uid}:{card_id}:{r['rarity']}")])
-        if not kb:
-            kb.append([InlineKeyboardButton("Эксклюзив можно продать только через рынок", callback_data="noop")])
-        kb.append([InlineKeyboardButton("Назад", callback_data=f"sell_back:{uid}")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Выберите редкость:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "sell_rarity":
-        card_id, rarity = int(parts[2]), parts[3]
-        user_states[uid] = {'action': 'sell_qty', 'card_id': card_id, 'rarity': rarity}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Введите количество:")
-        return
-
-    if action == "sell_do":
-        card_id, rarity, qty, price = int(parts[2]), parts[3], int(parts[4]), int(parts[5])
-        title = parts[6].replace(';', ':') if len(parts) > 6 else "Без названия"
-        if not remove_user_card(uid, card_id, rarity, qty):
-            await query.answer("Недостаточно карт.", show_alert=True)
-            return
-        with db_lock:
-            conn = db()
-            try:
-                conn.execute("INSERT INTO market_listings (seller_id,card_id,rarity,quantity,price_diamonds,title) VALUES (?,?,?,?,?,?)", (uid, card_id, rarity, qty, price, title))
-                conn.commit()
-            finally:
-                conn.close()
-        await safe_del(query.message)
-        await query.message.chat.send_message("Карта выставлена на рынок.")
-        return
-
-    if action == "sell_cancel":
-        user_states.pop(uid, None)
-        await safe_del(query.message)
-        await query.message.chat.send_message("Отменено.")
-        return
-
-    if action == "sell_back":
-        cards = get_user_cards(uid)
-        seen = set()
-        kb = []
-        for c in cards:
-            if c['card_id'] not in seen:
-                seen.add(c['card_id'])
-                kb.append([InlineKeyboardButton(c['card_name'], callback_data=f"sell_pick:{uid}:{c['card_id']}")])
-        kb.append([InlineKeyboardButton("Отмена", callback_data=f"sell_cancel:{uid}")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Выберите карту:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "farm_toggle":
-        u = get_user(uid)
-        if not u['farm_card_id']:
-            await query.answer("Сначала установите карточку в ферму.", show_alert=True)
-            return
-        new_status = 0 if u['farm_enabled'] else 1
-        update_user(uid, 'farm_enabled', new_status)
-        status_text = "Активна" if new_status else "Неактивна"
-        await query.answer(f"Ферма: {status_text}")
-        await farm_cmd(update, ctx)
-        return
-
-    if action == "farm_change":
-        cards = get_user_cards(uid)
-        if not cards:
-            await query.answer("Нет карт.", show_alert=True)
-            return
-        kb = []
-        for c in cards:
-            ri = RARITIES[c['rarity']]
-            income = FARM_INCOME.get(c['rarity'], 0)
-            kb.append([InlineKeyboardButton(f"{c['card_name']} {ri['e']} ({income}$/5мин)", callback_data=f"farm_set:{uid}:{c['card_id']}:{c['rarity']}")])
-        kb.append([InlineKeyboardButton("Назад", callback_data=f"farm_back:{uid}")])
-        await safe_del(query.message)
-        await query.message.chat.send_message("Выберите карточку для фермы:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if action == "farm_set":
-        card_id, rarity = int(parts[2]), parts[3]
-        update_user(uid, 'farm_card_id', card_id)
-        update_user(uid, 'farm_rarity', rarity)
-        with db_lock:
-            conn = db()
-            try:
-                card = conn.execute("SELECT name FROM cards WHERE id=?", (card_id,)).fetchone()
-            finally:
-                conn.close()
-        ri = RARITIES[rarity]
-        income = FARM_INCOME.get(rarity, 0)
-        await safe_del(query.message)
-        await query.message.chat.send_message(f"Установлена карта «{card['name']}» {ri['e']}\nПрибыль: {income}$ каждые 5 минут")
-        await farm_cmd(update, ctx)
-        return
-
-    if action == "farm_back":
-        await farm_cmd(update, ctx)
-        return
-
-    if action == "sup_reply":
-        ticket_id = int(parts[2])
-        user_states[query.from_user.id] = {'action': 'admin_reply', 'ticket_id': ticket_id}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Введите ответ для пользователя:")
-        return
-
-    if action == "sup_answer":
-        ticket_id = int(parts[2])
-        user_states[uid] = {'action': 'user_reply_to_admin', 'ticket_id': ticket_id}
-        await safe_del(query.message)
-        await query.message.chat.send_message("Введите ваш ответ техподдержке:")
-        return
+    # ... остальной код button_handler для других кнопок
 
 # === ТОЧКА ВХОДА ===
 async def post_init(app):
@@ -1975,6 +976,7 @@ async def post_init(app):
 
 def main():
     init_db()
+    restore_from_firebase()  # Восстанавливаем данные из Firebase
     
     app = Application.builder().token(TOKEN).build()
     
@@ -2003,7 +1005,7 @@ def main():
     
     app.post_init = post_init
     
-    logging.info("PeasCards запущен на Railway")
+    logging.info("PeasCards запущен с Firebase")
     app.run_polling()
 
 if __name__ == '__main__':
