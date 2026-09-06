@@ -86,9 +86,8 @@ TOKEN = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9m
 BOT_TITLE = "ЛакерИИ"
 MODEL_FILE = "laker_memory.json"
 SETTINGS_FILE = "laker_settings.json"
-OPENROUTER_KEY_FILE = "openrouter_key.txt"  # Файл для хранения ключа ИИ
+OPENROUTER_KEY_FILE = "openrouter_key.txt"
 
-# Загружаем ключ OpenRouter из файла (если есть)
 def load_openrouter_key():
     if os.path.exists(OPENROUTER_KEY_FILE):
         try:
@@ -149,8 +148,8 @@ CHANNEL_NAMES = {"all": "все посты", "trigger": "только тригг
 
 DEFAULT_SETTINGS = {"length": "medium", "style": "normal", "reactions": "on", "channel": "all", "ai_mode": "on", "model": "deepseek"}
 
-ALLOWED_REACTIONS = ["🤨", "", "😏", "😂", "👍", "", "💩", "🤯", "👌", "😅"]
-REACTION_FEEDBACK = {"": 2, "👌": 1, "❤️": 3, "": 3, "😂": 2, "🤩": 2, "": 1, "🤨": -1, "🤔": 0, "": 1, "😅": -1, "": -1, "👎": -3, "💩": -3, "": -3, "🤬": -3}
+ALLOWED_REACTIONS = ["", "🤔", "", "😂", "👍", "🔥", "💩", "🤯", "👌", "😅"]
+REACTION_FEEDBACK = {"👍": 2, "👌": 1, "❤️": 3, "🔥": 3, "😂": 2, "🤩": 2, "🙏": 1, "": -1, "🤔": 0, "🤯": 1, "😅": -1, "😱": -1, "👎": -3, "": -3, "🤮": -3, "🤬": -3}
 
 INTENT_PATTERNS = {
     "greeting": re.compile(r'\b(привет|приветик|здравствуй|здравствуйте|здорово|здарова|салют|hello|hi|хай|ку)\b', re.I),
@@ -224,7 +223,6 @@ knowledge_graph = None
 tfidf_vectorizer = None
 tfidf_matrix = None
 
-# Защита от двойных сообщений
 _processed_msgs = set()
 def is_duplicate(message):
     mid = message.message_id
@@ -235,11 +233,9 @@ def is_duplicate(message):
         _processed_msgs.clear()
     return False
 
-# Состояние для смены ключа OpenRouter
 key_change_state = {}
 KEY_PASSWORD = "eee345678b"
 
-# === NLP УТИЛИТЫ ===
 STOPWORDS = set()
 if stopwords_lib is not None:
     for lang in ("russian", "english"):
@@ -384,7 +380,6 @@ def format_template(tmpl):
     try: return tmpl.format(bot=BOT_TITLE)
     except Exception: return tmpl
 
-# === СЕМАНТИЧЕСКИЙ ПОИСК ===
 def get_embedding(text):
     if EMBED_MODEL is None or not text: return None
     try:
@@ -430,7 +425,6 @@ def semantic_search(query_text, top_k=10):
     except Exception:
         return []
 
-# === ГРАФ ЗНАНИЙ ===
 def build_knowledge_graph():
     global knowledge_graph
     if not NETWORKX_AVAILABLE: return
@@ -461,7 +455,6 @@ def get_related_words(word, depth=2):
     except Exception: pass
     return list(set(related))[:10]
 
-# === TF-IDF КЛАСТЕРИЗАЦИЯ ===
 def build_tfidf_clusters():
     global tfidf_vectorizer, tfidf_matrix
     if not SKLEARN_AVAILABLE: return
@@ -479,7 +472,6 @@ def build_tfidf_clusters():
                 model["clusters"].setdefault(str(cluster_id), []).append(i)
     except Exception: pass
 
-# === УПРАВЛЕНИЕ МОДЕЛЬЮ ===
 def extract_topic_tags(lemmas):
     return [l for l in lemmas if l not in STOPWORDS and len(l) > 3 and l.isalpha()][:2]
 
@@ -952,9 +944,8 @@ def minimal_answer(prompt, intent=None):
     tokens, _ = get_tokens_and_lemmas(prompt or "")
     words = [t for t in tokens if t not in STOPWORDS and t not in SENTENCE_END and len(t) > 1]
     if words: return random.choice(words).capitalize() + "."
-    return random.choice(["", "🤔", "👌", ""])
+    return random.choice(["🤨", "🤔", "👌", "😏"])
 
-# === AI ФУНКЦИИ ===
 async def fetch_openrouter(session, messages, model_name):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
@@ -1022,6 +1013,9 @@ async def ask_ai(user_id: int, user_name: str, text: str, selected_model: str = 
                 answer = await fetch_groq(session, messages, "llama-3.3-70b-versatile")
             elif selected_model == "deepseek":
                 answer = await fetch_openrouter(session, messages, "deepseek/deepseek-chat")
+            elif selected_model.startswith("custom:"):
+                custom_model = selected_model[7:]
+                answer = await fetch_openrouter(session, messages, custom_model)
             else:
                 try:
                     answer = await fetch_openrouter(session, messages, "meta-llama/llama-3.3-70b-instruct")
@@ -1039,7 +1033,6 @@ async def ask_ai(user_id: int, user_name: str, text: str, selected_model: str = 
 
     return answer.strip() if answer else None
 
-# === НАСТРОЙКИ ===
 def load_settings():
     global settings
     data = load_json(SETTINGS_FILE, {})
@@ -1057,7 +1050,6 @@ def save_settings_chat(chat_id, s):
         settings[str(chat_id)] = s
         save_json(SETTINGS_FILE, settings)
 
-# === ОБРАБОТЧИКИ ===
 START_TEXT = (
     f"Привет! Я {BOT_TITLE}.\n\n"
     "Отвечаю только если:\n"
@@ -1085,7 +1077,8 @@ def cmd_models(message):
     markup.add(
         types.InlineKeyboardButton(f"{'✅ ' if current == 'deepseek' else ''}DeepSeek (по умолчанию)", callback_data="model:deepseek"),
         types.InlineKeyboardButton(f"{'✅ ' if current == 'openrouter' else ''}OpenRouter (Llama 3.3 70B)", callback_data="model:openrouter"),
-        types.InlineKeyboardButton(f"{'✅ ' if current == 'groq' else ''}Groq (Llama 3.3 70B)", callback_data="model:groq")
+        types.InlineKeyboardButton(f"{'✅ ' if current == 'groq' else ''}Groq (Llama 3.3 70B)", callback_data="model:groq"),
+        types.InlineKeyboardButton(f"{'✅ ' if current.startswith('custom:') else ''}✍️ Своя модель", callback_data="model:custom")
     )
     bot.send_message(message.chat.id, "🤖 Выбери модель ИИ:", reply_markup=markup)
 
@@ -1130,18 +1123,26 @@ def callback_handler(call):
         if not call.message: return
         chat_id = call.message.chat.id
 
-        if action == "model" and value in ("deepseek", "openrouter", "groq"):
+        if action == "model":
+            if value == "custom":
+                key_change_state[chat_id] = {"step": "waiting_custom_model"}
+                bot.edit_message_text("✍️ Введи название своей модели (например: openai/gpt-4o):", chat_id, call.message.message_id)
+                try: bot.answer_callback_query(call.id)
+                except Exception: pass
+                return
+            
             s = get_settings(chat_id)
             s["model"] = value
             save_settings_chat(chat_id, s)
-            bot.edit_message_text(f"✅ Модель изменена на: {value}", chat_id, call.message.message_id)
+            model_name = value[7:] if value.startswith("custom:") else value
+            bot.edit_message_text(f"✅ Модель изменена на: {model_name}", chat_id, call.message.message_id)
             try: bot.answer_callback_query(call.id, "Сохранено")
             except Exception: pass
             return
 
         if action == "key_change" and value == "yes":
             key_change_state[chat_id] = {"step": "waiting_new_key"}
-            bot.edit_message_text(" Отправь новый API-ключ OpenRouter (начинается с sk-or-v1-...):", chat_id, call.message.message_id)
+            bot.edit_message_text("🔑 Отправь новый API-ключ OpenRouter (начинается с sk-or-v1-...):", chat_id, call.message.message_id)
             try: bot.answer_callback_query(call.id)
             except Exception: pass
             return
@@ -1244,16 +1245,16 @@ async def process_message(message):
         send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id, thread_id=thread_id, force_sticker=force_sticker)
 
 def mask_key(key):
-    """Маскирует ключ: показывает первые 15 и последние 4 символа"""
     if not key or len(key) < 20:
         return "***скрыт***"
     return f"{key[:15]}...{key[-4:]}"
 
 @bot.message_handler(content_types=["text"], func=lambda m: m.text and not m.text.strip().startswith("/"))
 def text_handler(message):
+    global OPENROUTER_API_KEY
+    
     if is_duplicate(message): return
     
-    # Обработка смены ключа OpenRouter
     chat_id = message.chat.id
     if chat_id in key_change_state:
         state = key_change_state[chat_id]
@@ -1282,9 +1283,7 @@ def text_handler(message):
         elif state["step"] == "waiting_new_key":
             new_key = message.text.strip()
             if new_key and (new_key.startswith("sk-or-v1-") or len(new_key) > 30):
-                global OPENROUTER_API_KEY
                 OPENROUTER_API_KEY = new_key
-                # Сохраняем в файл
                 try:
                     with open(OPENROUTER_KEY_FILE, "w") as f:
                         f.write(new_key)
@@ -1294,6 +1293,18 @@ def text_handler(message):
                     bot.send_message(chat_id, f"❌ Ошибка сохранения: {e}")
             else:
                 bot.send_message(chat_id, "❌ Неверный формат ключа. Ключ должен начинаться с sk-or-v1-")
+            del key_change_state[chat_id]
+            return
+        
+        elif state["step"] == "waiting_custom_model":
+            custom_model = message.text.strip()
+            if custom_model and len(custom_model) > 3:
+                s = get_settings(chat_id)
+                s["model"] = f"custom:{custom_model}"
+                save_settings_chat(chat_id, s)
+                bot.send_message(chat_id, f"✅ Своя модель установлена: {custom_model}")
+            else:
+                bot.send_message(chat_id, "❌ Слишком короткое название модели.")
             del key_change_state[chat_id]
             return
     
@@ -1380,7 +1391,6 @@ def send_answer_and_sticker(chat_id, answer, reply_message_id=None, thread_id=No
 def main():
     global bot_id, bot_username, settings, faiss_index, knowledge_graph, tfidf_vectorizer, tfidf_matrix, OPENROUTER_API_KEY
     
-    # Загружаем ключ OpenRouter из файла при старте
     if os.path.exists(OPENROUTER_KEY_FILE):
         try:
             with open(OPENROUTER_KEY_FILE, "r") as f:
