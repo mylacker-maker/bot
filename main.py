@@ -87,7 +87,7 @@ BOT_TITLE = "ЛакерИИ"
 MODEL_FILE = "laker_memory.json"
 SETTINGS_FILE = "laker_settings.json"
 
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_AI_HISTORY = 15
 
