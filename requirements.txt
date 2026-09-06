@@ -1,5 +1,6 @@
 pyTelegramBotAPI
 requests
+aiohttp
 ftfy
 unidecode
 emoji
@@ -15,4 +16,3 @@ faiss-cpu
 numpy
 scikit-learn
 networkx
-aiohttp
