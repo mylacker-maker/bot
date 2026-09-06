@@ -87,8 +87,9 @@ BOT_TITLE = "ЛакерИИ"
 MODEL_FILE = "laker_memory.json"
 SETTINGS_FILE = "laker_settings.json"
 
-OPENROUTER_API_KEY = "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"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_API_KEY = "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"
+GROQ_API_KEY = ""  # Добавь если нужен groq
+
 MAX_AI_HISTORY = 15
 
 SYSTEM_PROMPT = """Ты ЛакерИИ или просто Лакер. Твой создатель тоже Лакер.
@@ -133,7 +134,7 @@ LENGTH_NAMES = {"short": "короткий", "medium": "средний", "long":
 STYLE_NAMES = {"precise": "точный", "normal": "обычный", "wild": "безумный"}
 CHANNEL_NAMES = {"all": "все посты", "trigger": "только триггер", "off": "выкл"}
 
-DEFAULT_SETTINGS = {"length": "medium", "style": "normal", "reactions": "on", "channel": "all", "ai_mode": "off"}
+DEFAULT_SETTINGS = {"length": "medium", "style": "normal", "reactions": "on", "channel": "all", "ai_mode": "on", "model": "deepseek"}
 
 ALLOWED_REACTIONS = ["🤨", "", "😏", "😂", "👍", "🔥", "💩", "🤯", "👌", "😅"]
 REACTION_FEEDBACK = {"": 2, "👌": 1, "❤️": 3, "🔥": 3, "😂": 2, "🤩": 2, "🙏": 1, "🤨": -1, "🤔": 0, "🤯": 1, "😅": -1, "": -1, "👎": -3, "💩": -3, "🤮": -3, "🤬": -3}
@@ -166,7 +167,7 @@ INTENT_TEMPLATES = {
     "sorry": ["ладно", "ок"],
     "praise": ["спасибо", "стараюсь"],
     "insult": ["сам такой", "не груби"],
-    "laugh": ["ахах", "лол", ""],
+    "laugh": ["ахах", "лол", "😂"],
     "help": ["пиши Лакер", "есть /settings"],
     "question": ["хороший вопрос", "думаю"]
 }
@@ -220,6 +221,9 @@ def is_duplicate(message):
     if len(_processed_msgs) > 2000:
         _processed_msgs.clear()
     return False
+
+# Состояние для смены токена
+token_change_state = {}
 
 # === NLP УТИЛИТЫ ===
 STOPWORDS = set()
@@ -529,6 +533,8 @@ def load_model():
     model["facts"] = data.get("facts", {}) if isinstance(data.get("facts"), dict) else {}
     model["recent_context"] = data.get("recent_context", {}) if isinstance(data.get("recent_context"), dict) else {}
     model["stickers"] = data.get("stickers", []) if isinstance(data.get("stickers"), list) else []
+    model["embeddings"] = data.get("embeddings", []) if isinstance(data.get("embeddings"), list) else []
+    model["knowledge_graph"] = data.get("knowledge_graph", []) if isinstance(data.get("knowledge_graph"), list) else []
     model["meta"] = data.get("meta", {"learned": 0}) if isinstance(data.get("meta"), dict) else {"learned": 0}
     rebuild_all_from_phrases()
     rebuild_known_texts()
@@ -932,50 +938,84 @@ def minimal_answer(prompt, intent=None):
     tokens, _ = get_tokens_and_lemmas(prompt or "")
     words = [t for t in tokens if t not in STOPWORDS and t not in SENTENCE_END and len(t) > 1]
     if words: return random.choice(words).capitalize() + "."
-    return random.choice(["🤨", "🤔", "👌", "😏"])
+    return random.choice(["", "🤔", "👌", "😏"])
 
-# === AI OPENROUTER ФУНКЦИЯ (ПОЛНОСТЬЮ ПЕРЕПИСАНА ПО ОБРАЗЦУ ДРУГА) ===
-async def ask_ai_openrouter(user_id: int, user_name: str, text: str) -> str:
-    user_data_str = f"[Профиль: Имя={user_name}, ID={user_id}]"
-
-    ai_history[user_id].append({
-        "role": "user",
-        "content": f"{user_data_str}\nСообщение: {text}"
-    })
-    ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
-
-    data = {
-        "model": "openrouter/free",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *ai_history[user_id]
-        ],
-        "max_tokens": 1024,
-        "stream": False
-    }
-
+# === AI ФУНКЦИИ ===
+async def fetch_openrouter(session, messages, model_name):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://telegram.org",
         "X-Title": "LakerAI Bot"
     }
+    data = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": 1024,
+        "stream": False
+    }
+    async with session.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json=data,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=120)
+    ) as response:
+        result = await response.json()
+        if response.status != 200:
+            error_msg = result.get("error", {}).get("message", str(result))
+            raise Exception(f"OpenRouter Error ({response.status}): {error_msg}")
+        return result["choices"][0]["message"]["content"]
+
+async def fetch_groq(session, messages, model_name):
+    if not GROQ_API_KEY:
+        raise Exception("GROQ_API_KEY не установлен")
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": 1024
+    }
+    async with session.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        json=data,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=120)
+    ) as response:
+        result = await response.json()
+        if response.status != 200:
+            error_msg = result.get("error", {}).get("message", str(result))
+            raise Exception(f"Groq Error ({response.status}): {error_msg}")
+        return result["choices"][0]["message"]["content"]
+
+async def ask_ai(user_id: int, user_name: str, text: str, selected_model: str = "deepseek") -> str:
+    user_data_str = f"[Профиль: Имя={user_name}, ID={user_id}]"
+    ai_history[user_id].append({
+        "role": "user",
+        "content": f"{user_data_str}\nСообщение: {text}"
+    })
+    ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            OPENROUTER_URL,
-            json=data,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=120)
-        ) as response:
-            result = await response.json()
-
-            if response.status != 200:
-                error_msg = result.get("error", {}).get("message", str(result))
-                print(f"[AI ERROR] Status {response.status}: {error_msg}")
-                return f"Ошибка API ({response.status}): {error_msg}"
-
-            answer = result["choices"][0]["message"]["content"]
+        try:
+            if selected_model == "openrouter":
+                answer = await fetch_openrouter(session, messages, "meta-llama/llama-3.3-70b-instruct")
+            elif selected_model == "groq":
+                answer = await fetch_groq(session, messages, "llama-3.3-70b-versatile")
+            elif selected_model == "deepseek":
+                answer = await fetch_openrouter(session, messages, "deepseek/deepseek-chat")
+            else:
+                try:
+                    answer = await fetch_openrouter(session, messages, "meta-llama/llama-3.3-70b-instruct")
+                except Exception:
+                    answer = await fetch_groq(session, messages, "llama-3.3-70b-versatile")
+        except Exception as e:
+            print(f"[AI ERROR] {e}")
+            return None
 
     ai_history[user_id].append({
         "role": "assistant",
@@ -983,275 +1023,7 @@ async def ask_ai_openrouter(user_id: int, user_name: str, text: str) -> str:
     })
     ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
 
-    return answer.strip()
-
-# === ГЕНЕРАЦИЯ ОТВЕТА ===
-def generate_candidates(chat_id, prompt_text, replied_text, profile, intent, search_text=None, require_relevance=True):
-    candidates = []
-    seen = set()
-    query_text = (prompt_text or replied_text or "").strip()
-    search_text = (search_text or query_text).strip()
-    prompt_tokens, prompt_lemmas = get_tokens_and_lemmas(query_text)
-    search_tokens, search_lemmas = get_tokens_and_lemmas(search_text)
-    top = retrieve_phrases(search_lemmas, search_text, limit=profile.get("top_limit", 30))
-
-    def add_candidate(text, allow_known=False):
-        if not text: return
-        text = preprocess_text(text).strip()
-        if not text: return
-        text = truncate_text_to_words(text, profile["max"] + 5)
-        if not text: return
-        key = text.lower()
-        if key in seen or key in bad_texts_lower: return
-        if (not allow_known) and key in known_texts_lower: return
-        seen.add(key)
-        candidates.append(text)
-
-    for fact_text in get_fact_candidates(chat_id, query_text): add_candidate(fact_text, allow_known=True)
-    if intent and intent in INTENT_TEMPLATES:
-        for tmpl in INTENT_TEMPLATES[intent][:3]: add_candidate(format_template(tmpl), allow_known=True)
-    
-    if replied_text or prompt_text:
-        ctx_to_match = replied_text if replied_text else prompt_text
-        ctx_lower = ctx_to_match.lower().strip()
-        for pair in model.get("pairs", [])[-500:]:
-            score = fuzz.token_set_ratio(ctx_lower, pair["context"].lower().strip())
-            if score > 75:
-                add_candidate(pair["response"], allow_known=True)
-                break
-
-    for _ in range(profile.get("keyword_generations", 6)):
-        pool = prompt_tokens if prompt_tokens and random.random() < 0.7 else search_tokens
-        add_candidate(generate_from_keyword(pool, profile))
-        
-    for idx, score in top[:profile.get("phrase_seeds", 6)]:
-        if 0 <= idx < len(model["phrases"]):
-            add_candidate(generate_from_phrase_seed(model["phrases"][idx], prompt_tokens, prompt_lemmas, profile))
-            
-    for _ in range(profile.get("start_generations", 2)):
-        add_candidate(generate_from_start(profile))
-        
-    for _ in range(profile.get("markov_calls", 3)):
-        add_candidate(generate_markovify_sentence(profile))
-        
-    for _ in range(2):
-        add_candidate(generate_fused_phrase(profile))
-
-    if not candidates:
-        for idx, score in top[:3]:
-            if 0 <= idx < len(model["phrases"]):
-                seed = [t for t in model["phrases"][idx].get("tokens", [])[:profile["max"]] if t not in SENTENCE_END]
-                if seed: add_candidate(tokens_to_text(seed), allow_known=True)
-                
-    if not candidates and model["phrases"]:
-        add_candidate(random.choice(model["phrases"][-100:]).get("text", ""), allow_known=True)
-        
-    if require_relevance and (prompt_tokens or prompt_lemmas):
-        relevant = [c for c in candidates if candidate_is_relevant(c, prompt_tokens, prompt_lemmas, intent)]
-        if relevant: candidates = relevant
-        else: candidates = []
-        
-    return candidates[:profile.get("candidates", 20) * 2]
-
-def get_idf_weights(lemmas):
-    n = max(1, len(model["phrases"]))
-    weights = {}
-    for lemma in lemmas:
-        if not lemma: continue
-        idf = math.log((n + 1) / (model["df"].get(lemma, 0) + 1)) + 1.0
-        weights[lemma] = weights.get(lemma, 0.0) + idf
-    return weights
-
-def dict_cosine(a, b):
-    if not a or not b: return 0.0
-    common = a.keys() & b.keys()
-    if not common: return 0.0
-    dot = sum(a[k] * b[k] for k in common)
-    na = math.sqrt(sum(v * v for v in a.values()))
-    nb = math.sqrt(sum(v * v for v in b.values()))
-    return dot / (na * nb + 1e-9)
-
-def fluency_score(tokens):
-    if len(tokens) < 2: return 0.5
-    wt = model.get("word_transitions", {})
-    good, total = 0, 0
-    for i in range(len(tokens) - 1):
-        if tokens[i] in SENTENCE_END: continue
-        total += 1
-        nxt = wt.get(tokens[i], {})
-        if nxt.get(tokens[i + 1], 0) > 0: good += 1
-    if total == 0: return 0.5
-    return good / total
-
-def score_candidate(candidate, prompt_text, prompt_lemmas, prompt_lang, prompt_has_emoji, profile, intent, recent_answers):
-    cand_tokens, cand_lemmas = get_tokens_and_lemmas(candidate)
-    if not cand_tokens: return -100.0
-    prompt_weights = get_idf_weights(prompt_lemmas)
-    cand_weights = get_idf_weights(cand_lemmas)
-    overlap = dict_cosine(prompt_weights, cand_weights)
-    try: fuzz_score = fuzz.token_set_ratio(fuzzy_norm(prompt_text), fuzzy_norm(candidate)) / 100.0 if prompt_text else 0.5
-    except Exception: fuzz_score = 0.5
-    
-    words = len([t for t in cand_tokens if t not in SENTENCE_END])
-    desired = (profile["min"] + profile["max"]) / 2.0
-    length_score = max(0.0, 1.0 - abs(words - desired) / max(1.0, desired))
-    if words < profile["min"]: length_score *= 0.5
-    if words > profile["max"] * 1.2: length_score *= 0.4
-    
-    counts = {}
-    max_count = 1
-    for t in cand_tokens:
-        if t in SENTENCE_END: continue
-        counts[t] = counts.get(t, 0) + 1
-        if counts[t] > max_count: max_count = counts[t]
-    repeat_score = max(0.0, 1.0 - (max_count / max(1, words)))
-    unique_score = len(set([t for t in cand_tokens if t not in SENTENCE_END])) / max(1, words)
-    
-    cand_lang = detect_lang(candidate)
-    lang_score = 1.0 if prompt_lang != "unknown" and cand_lang == prompt_lang else 0.0
-    emoji_score = 1.0 if prompt_has_emoji and has_emoji(candidate) else 0.0
-    noise = random.random()
-    
-    features = [overlap, fuzz_score, length_score, repeat_score, unique_score, lang_score, emoji_score, noise]
-    weights = [5.0, profile.get("fuzz_weight", 3.5), 3.0, 2.5, 1.0, 1.0, 0.8, profile.get("noise", 0.35)]
-    try: score = float(sum(f * w for f, w in zip(features, weights)))
-    except Exception: score = 0.0
-    
-    score += fluency_score(cand_tokens) * 4.0
-    candidate_lower = candidate.lower()
-    prompt_lower = (prompt_text or "").lower()
-    
-    if candidate_lower in bad_texts_lower: score -= 60.0
-    elif candidate_lower in good_texts_lower: score += 8.0
-    elif candidate_lower in known_texts_lower: score -= 25.0
-    if candidate_lower == prompt_lower: score -= 40.0
-    
-    max_recent_ratio = 0
-    for old in recent_answers:
-        try: ratio = fuzz.ratio(candidate_lower, old)
-        except Exception: ratio = 0
-        if ratio > max_recent_ratio: max_recent_ratio = ratio
-    if max_recent_ratio >= 80: score -= 25.0
-    elif max_recent_ratio >= 60: score -= 10.0
-    
-    word_tokens = [t for t in cand_tokens if t not in SENTENCE_END]
-    if len(word_tokens) > 1:
-        bigrams = [(word_tokens[i], word_tokens[i + 1]) for i in range(len(word_tokens) - 1)]
-        unique_bigram_ratio = len(set(bigrams)) / max(1, len(bigrams))
-        score += unique_bigram_ratio * 2.0
-        score -= (1.0 - unique_bigram_ratio) * 6.0
-        
-    if intent == "question" and "?" in candidate: score += 1.0
-    if candidate and candidate[-1] in SENTENCE_END: score += 1.0
-    if words < profile["min"]: score -= 6.0
-    if words > profile["max"] * 1.3: score -= 3.0
-    
-    return score
-
-def choose_best(candidates, prompt_text, profile, intent, recent_answers):
-    if not candidates: return None, -100.0
-    prompt_tokens, prompt_lemmas = get_tokens_and_lemmas(prompt_text)
-    prompt_lang = detect_lang(prompt_text)
-    prompt_has_emoji = has_emoji(prompt_text)
-    best, best_score = None, -1e9
-    for cand in candidates:
-        try: sc = score_candidate(cand, prompt_text, prompt_lemmas, prompt_lang, prompt_has_emoji, profile, intent, recent_answers)
-        except Exception: sc = -100.0
-        if sc > best_score: best_score, best = sc, cand
-    return best, best_score
-
-def make_answer(chat_id, prompt_text, replied_text, chat_settings):
-    profile = get_profile(chat_settings)
-    query = prompt_text or replied_text or ""
-    intent = detect_intent(query)
-    search_text = expand_query_with_context(chat_id, query)
-
-    local_best, local_score = None, -1e9
-    try:
-        recent_answers = get_recent_answers(chat_id)
-        candidates = generate_candidates(chat_id, prompt_text, replied_text, profile, intent, search_text=search_text, require_relevance=True)
-        best, score = choose_best(candidates, query, profile, intent, recent_answers)
-
-        if best and best.strip() and score >= QUALITY_THRESHOLD:
-            local_best, local_score = best, score
-        else:
-            candidates2 = generate_candidates(chat_id, prompt_text, replied_text, profile, intent, search_text=search_text, require_relevance=False)
-            best2, score2 = choose_best(candidates2, query, profile, intent, recent_answers)
-            if best2 and best2.strip() and score2 > score and score2 >= QUALITY_THRESHOLD - 0.5:
-                local_best, local_score = best2, score2
-            elif best and score > -5.0: local_best, local_score = best, score
-            elif best2 and score2 > -5.0: local_best, local_score = best2, score2
-    except Exception: pass
-
-    final_answer = local_best if local_best else minimal_answer(query, intent)
-    
-    if final_answer and local_score < 3.0:
-        ctx = model.get("recent_context", {}).get(str(chat_id), [])
-        if len(ctx) >= 3:
-            older_ctx = random.choice(ctx[:-2])
-            older_tags = older_ctx.get("tags", [])
-            current_tags = extract_topic_tags(get_tokens_and_lemmas(query)[1])
-            if set(older_tags) & set(current_tags):
-                bridge_phrases = [
-                    f"Кстати, это напоминает то, что мы обсуждали: «{older_ctx['text'][:30]}...»",
-                    f"Между прочим, это перекликается с твоим сообщением: «{older_ctx['text'][:30]}...»"
-                ]
-                final_answer = random.choice(bridge_phrases) + " " + final_answer
-
-    return polish_answer(final_answer, intent)
-
-def choose_reaction(answer_text):
-    weights = {e: 1.0 for e in ALLOWED_REACTIONS}
-    weights["🤨"] += 6.0
-    if answer_text.count("?") > 0: weights["🤔"] += 2.5
-    words = len(answer_text.split())
-    if words <= 6: weights["👌"] += 2.0
-    if words >= 25: weights["🤨"] += 2.0
-    for e in ALLOWED_REACTIONS:
-        if e in answer_text: weights[e] += 4.0
-    emojis = list(weights.keys())
-    weights_list = [weights[e] for e in emojis]
-    try: return random.choices(emojis, weights=weights_list, k=1)[0]
-    except Exception: return random.choice(emojis)
-
-def set_reaction(chat_id, message_id, reaction_emoji):
-    try:
-        reaction = [{"type": "emoji", "emoji": reaction_emoji}]
-        import requests
-        url = f"https://api.telegram.org/bot{TOKEN}/setMessageReaction"
-        payload = {"chat_id": chat_id, "message_id": message_id, "reaction": reaction}
-        response = requests.post(url, json=payload, timeout=5)
-        return response.ok
-    except Exception:
-        return False
-
-def extract_reaction_emoji(reaction_list):
-    if not reaction_list: return None
-    for r in reaction_list:
-        if isinstance(r, dict) and r.get("type") == "emoji": return r.get("emoji")
-        else:
-            if getattr(r, "type", "emoji") == "emoji": return getattr(r, "emoji", None)
-    return None
-
-def handle_message_reaction(message_reaction):
-    try:
-        message_id = getattr(message_reaction, "message_id", None)
-        chat = getattr(message_reaction, "chat", None)
-        chat_id = getattr(chat, "id", None)
-        if message_id is None or chat_id is None: return
-        new_reaction = getattr(message_reaction, "new_reaction", None) or []
-        emoji_str = extract_reaction_emoji(new_reaction)
-        if not emoji_str: return
-        key = f"{chat_id}:{message_id}"
-        with model_lock:
-            info = model.get("bot_messages", {}).get(key)
-            if not info: return
-            text = info.get("text", "")
-            weight = REACTION_FEEDBACK.get(emoji_str, 0)
-            if weight > 0: apply_positive_feedback(text, weight)
-            elif weight < 0: apply_negative_feedback(text, weight)
-            save_if_needed(True)
-    except Exception: pass
+    return answer.strip() if answer else None
 
 # === НАСТРОЙКИ ===
 def load_settings():
@@ -1271,115 +1043,6 @@ def save_settings_chat(chat_id, s):
         settings[str(chat_id)] = s
         save_json(SETTINGS_FILE, settings)
 
-def settings_text(chat_id):
-    return f"⚙️ Настройки {BOT_TITLE}\n\nВыбери категорию:\n• Ответы (длина и стиль)\n• Поведение (реакции и ИИ)\n• Канал (режим автоответов)\n• Инфо (текущие значения)"
-
-def settings_info_text(chat_id):
-    s = get_settings(chat_id)
-    ai_status = "вкл" if s.get("ai_mode") == "on" else "выкл"
-    return f"📊 Текущие настройки:\n\nДлина: {LENGTH_NAMES.get(s['length'], s['length'])}\nСтиль: {STYLE_NAMES.get(s['style'], s['style'])}\nРежим ИИ: {ai_status}\nРеакции: {'вкл' if s['reactions'] == 'on' else 'выкл'}\nКанал: {CHANNEL_NAMES.get(s['channel'], s['channel'])}"
-
-def settings_main_markup():
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("💬 Ответы", callback_data="cat:answers"),
-        types.InlineKeyboardButton(" Поведение", callback_data="cat:behavior"),
-        types.InlineKeyboardButton("📢 Канал", callback_data="cat:channel"),
-        types.InlineKeyboardButton("📊 Текущие значения", callback_data="cat:info")
-    )
-    return markup
-
-def settings_answers_markup(chat_id):
-    s = get_settings(chat_id)
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    markup.add(
-        types.InlineKeyboardButton("✅ Короткий" if s["length"] == "short" else "Короткий", callback_data="len:short"),
-        types.InlineKeyboardButton("✅ Средний" if s["length"] == "medium" else "Средний", callback_data="len:medium"),
-        types.InlineKeyboardButton("✅ Длинный" if s["length"] == "long" else "Длинный", callback_data="len:long")
-    )
-    markup.add(
-        types.InlineKeyboardButton("✅ Точный" if s["style"] == "precise" else "Точный", callback_data="style:precise"),
-        types.InlineKeyboardButton("✅ Обычный" if s["style"] == "normal" else "Обычный", callback_data="style:normal"),
-        types.InlineKeyboardButton("✅ Безумный" if s["style"] == "wild" else "Безумный", callback_data="style:wild")
-    )
-    markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="cat:main"))
-    return markup
-
-def settings_behavior_markup(chat_id):
-    s = get_settings(chat_id)
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("✅ Реакции вкл" if s["reactions"] == "on" else "Реакции вкл", callback_data="react:on"),
-        types.InlineKeyboardButton("✅ Реакции выкл" if s["reactions"] == "off" else "Реакции выкл", callback_data="react:off")
-    )
-    markup.add(
-        types.InlineKeyboardButton("✅ ИИ вкл" if s.get("ai_mode") == "on" else "ИИ вкл", callback_data="ai:on"),
-        types.InlineKeyboardButton("✅ ИИ выкл" if s.get("ai_mode") == "off" else "ИИ выкл", callback_data="ai:off")
-    )
-    markup.add(types.InlineKeyboardButton("️ Назад", callback_data="cat:main"))
-    return markup
-
-def settings_channel_markup(chat_id):
-    s = get_settings(chat_id)
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    markup.add(
-        types.InlineKeyboardButton("✅ Все посты" if s["channel"] == "all" else "Все посты", callback_data="chan:all"),
-        types.InlineKeyboardButton("✅ Только триггер" if s["channel"] == "trigger" else "Только триггер", callback_data="chan:trigger"),
-        types.InlineKeyboardButton("✅ Выкл" if s["channel"] == "off" else "Выкл", callback_data="chan:off")
-    )
-    markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="cat:main"))
-    return markup
-
-def answers_text(chat_id):
-    s = get_settings(chat_id)
-    return f"💬 Настройки ответов:\n\nДлина: {LENGTH_NAMES.get(s['length'], s['length'])}\nСтиль: {STYLE_NAMES.get(s['style'], s['style'])}\n\nКороткий — 1-8 слов\nСредний — 2-16 слов\nДлинный — 4-28 слов\n\nТочный — меньше случайности\nОбычный — баланс\nБезумный — больше креатива"
-
-def behavior_text(chat_id):
-    s = get_settings(chat_id)
-    ai_status = "вкл" if s.get("ai_mode") == "on" else "выкл"
-    return f" Настройки поведения:\n\nРеакции: {'вкл' if s['reactions'] == 'on' else 'выкл'}\nРежим ИИ: {ai_status}\n\nРеакции — бот иногда ставит реакцию\nРежим ИИ — ответы генерируются нейросетью OpenRouter"
-
-def channel_text(chat_id):
-    s = get_settings(chat_id)
-    return f"📢 Настройки канала:\n\nРежим: {CHANNEL_NAMES.get(s['channel'], s['channel'])}\n\nВсе посты — отвечать на каждый пост\nТолько триггер — только на 'Лакер'\nВыкл — не отвечать на посты"
-
-def store_bot_message(sent_message, answer, chat_id):
-    if not sent_message: return
-    message_id = getattr(sent_message, "message_id", None)
-    if message_id is None: return
-    key = f"{chat_id}:{message_id}"
-    with model_lock:
-        bm = model.setdefault("bot_messages", {})
-        bm[key] = {"text": answer, "chat_id": chat_id, "ts": time.time()}
-        if len(bm) > 1000:
-            items = sorted(bm.items(), key=lambda x: x[1].get("ts", 0))
-            for k, _ in items[:len(bm) - 1000]: del bm[k]
-        add_recent_answer(chat_id, answer)
-        save_if_needed(True)
-
-def send_answer_and_sticker(chat_id, answer, reply_message_id=None, thread_id=None, force_sticker=False):
-    sent_msg = None
-    try:
-        if thread_id:
-            try: sent_msg = bot.send_message(chat_id, answer, reply_to_message_id=reply_message_id, message_thread_id=thread_id)
-            except TypeError: sent_msg = bot.send_message(chat_id, answer, reply_to_message_id=reply_message_id)
-        else:
-            sent_msg = bot.send_message(chat_id, answer, reply_to_message_id=reply_message_id)
-        store_bot_message(sent_msg, answer, chat_id)
-    except Exception: pass
-
-    stickers = model.get("stickers", [])
-    if stickers:
-        should_send_sticker = force_sticker or (random.random() < STICKER_CHANCE)
-        if should_send_sticker:
-            try:
-                sticker_id = random.choice(stickers)
-                if thread_id:
-                    bot.send_sticker(chat_id, sticker_id, reply_to_message_id=reply_message_id, message_thread_id=thread_id)
-                else:
-                    bot.send_sticker(chat_id, sticker_id, reply_to_message_id=reply_message_id)
-            except Exception: pass
-
 # === ОБРАБОТЧИКИ ===
 START_TEXT = (
     f"Привет! Я {BOT_TITLE}.\n\n"
@@ -1388,11 +1051,9 @@ START_TEXT = (
     "• Упомянешь меня через @{bot_username or 'бот'}\n"
     "• Ответишь на моё сообщение\n\n"
     "Обычные сообщения в чате я тихо учу.\n\n"
-    "/settings — категории настроек\n"
-    "/good и /bad — оценить ответ реплаем\n\n"
-    "💡 Я умею запоминать стикеры и использовать их в диалоге!\n\n"
-    "🔥 НОВОЕ:\n"
-    "• добавлена поддержка ИИ openai в настройках."
+    "/models — выбрать модель ИИ\n"
+    "/token — управление токеном бота\n"
+    "/good и /bad — оценить ответ реплаем"
 )
 
 @bot.message_handler(commands=["start"])
@@ -1402,20 +1063,31 @@ def cmd_start(message):
 @bot.message_handler(commands=["help"])
 def cmd_help(message): cmd_start(message)
 
-@bot.message_handler(commands=["settings"])
-def cmd_settings(message):
-    bot.send_message(message.chat.id, settings_text(message.chat.id), reply_markup=settings_main_markup())
+@bot.message_handler(commands=["models"])
+def cmd_models(message):
+    s = get_settings(message.chat.id)
+    current = s.get("model", "deepseek")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(f"{'✅ ' if current == 'deepseek' else ''}DeepSeek (по умолчанию)", callback_data="model:deepseek"),
+        types.InlineKeyboardButton(f"{'✅ ' if current == 'openrouter' else ''}OpenRouter (Llama 3.3 70B)", callback_data="model:openrouter"),
+        types.InlineKeyboardButton(f"{'✅ ' if current == 'groq' else ''}Groq (Llama 3.3 70B)", callback_data="model:groq")
+    )
+    bot.send_message(message.chat.id, " Выбери модель ИИ:", reply_markup=markup)
 
-def get_replied_bot_text(message):
-    rm = message.reply_to_message
-    if not rm: return None
-    if rm.from_user and bot_id is not None and rm.from_user.id != bot_id: return None
-    return rm.text or rm.caption or ""
+@bot.message_handler(commands=["token"])
+def cmd_token(message):
+    chat_id = message.chat.id
+    token_change_state[chat_id] = {"step": "password", "msg_id": message.message_id}
+    bot.send_message(chat_id, " Введи пароль для доступа к токену:", reply_to_message_id=message.message_id)
 
 @bot.message_handler(commands=["good"])
 def cmd_good(message):
-    text = get_replied_bot_text(message)
-    if not text: return bot.reply_to(message, "Нужно ответить на моё сообщение.")
+    rm = message.reply_to_message
+    if not rm: return bot.reply_to(message, "Нужно ответить на моё сообщение.")
+    if rm.from_user and bot_id is not None and rm.from_user.id != bot_id: return bot.reply_to(message, "Нужно ответить на моё сообщение.")
+    text = rm.text or rm.caption or ""
+    if not text: return bot.reply_to(message, "Нужно ответить на текстовое сообщение.")
     with model_lock:
         apply_positive_feedback(text, 3)
         save_if_needed(True)
@@ -1423,8 +1095,11 @@ def cmd_good(message):
 
 @bot.message_handler(commands=["bad"])
 def cmd_bad(message):
-    text = get_replied_bot_text(message)
-    if not text: return bot.reply_to(message, "Нужно ответить на моё сообщение.")
+    rm = message.reply_to_message
+    if not rm: return bot.reply_to(message, "Нужно ответить на моё сообщение.")
+    if rm.from_user and bot_id is not None and rm.from_user.id != bot_id: return bot.reply_to(message, "Нужно ответить на моё сообщение.")
+    text = rm.text or rm.caption or ""
+    if not text: return bot.reply_to(message, "Нужно ответить на текстовое сообщение.")
     with model_lock:
         apply_negative_feedback(text, -3)
         save_if_needed(True)
@@ -1440,38 +1115,32 @@ def callback_handler(call):
         action, value = call.data.split(":", 1)
         if not call.message: return
         chat_id = call.message.chat.id
-        s = get_settings(chat_id)
-        changed = False
 
-        if action == "cat":
-            try:
-                if value == "main": bot.edit_message_text(settings_text(chat_id), chat_id, call.message.message_id, reply_markup=settings_main_markup())
-                elif value == "answers": bot.edit_message_text(answers_text(chat_id), chat_id, call.message.message_id, reply_markup=settings_answers_markup(chat_id))
-                elif value == "behavior": bot.edit_message_text(behavior_text(chat_id), chat_id, call.message.message_id, reply_markup=settings_behavior_markup(chat_id))
-                elif value == "channel": bot.edit_message_text(channel_text(chat_id), chat_id, call.message.message_id, reply_markup=settings_channel_markup(chat_id))
-                elif value == "info": bot.edit_message_text(settings_info_text(chat_id), chat_id, call.message.message_id, reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Назад", callback_data="cat:main")))
+        if action == "model" and value in ("deepseek", "openrouter", "groq"):
+            s = get_settings(chat_id)
+            s["model"] = value
+            save_settings_chat(chat_id, s)
+            bot.edit_message_text(f"✅ Модель изменена на: {value}", chat_id, call.message.message_id)
+            try: bot.answer_callback_query(call.id, "Сохранено")
             except Exception: pass
+            return
+
+        if action == "token_change" and value == "yes":
+            chat_id = call.message.chat.id
+            token_change_state[chat_id] = {"step": "waiting_new_token"}
+            bot.edit_message_text("🔑 Отправь новый токен бота:", chat_id, call.message.message_id)
             try: bot.answer_callback_query(call.id)
             except Exception: pass
             return
 
-        if action == "len" and value in LENGTH_PROFILES: s["length"] = value; changed = True
-        elif action == "style" and value in STYLE_PROFILES: s["style"] = value; changed = True
-        elif action == "react" and value in ("on", "off"): s["reactions"] = value; changed = True
-        elif action == "chan" and value in ("all", "trigger", "off"): s["channel"] = value; changed = True
-        elif action == "ai" and value in ("on", "off"): s["ai_mode"] = value; changed = True
-
-        if changed: save_settings_chat(chat_id, s)
-
-        current_markup, current_text = None, None
-        if action in ("len", "style"): current_text, current_markup = answers_text(chat_id), settings_answers_markup(chat_id)
-        elif action in ("react", "ai"): current_text, current_markup = behavior_text(chat_id), settings_behavior_markup(chat_id)
-        elif action == "chan": current_text, current_markup = channel_text(chat_id), settings_channel_markup(chat_id)
-
-        if current_text and current_markup:
-            try: bot.edit_message_text(current_text, chat_id, call.message.message_id, reply_markup=current_markup)
+        if action == "token_change" and value == "no":
+            bot.edit_message_text("❌ Отмена смены токена.", chat_id, call.message.message_id)
+            if chat_id in token_change_state: del token_change_state[chat_id]
+            try: bot.answer_callback_query(call.id)
             except Exception: pass
-        try: bot.answer_callback_query(call.id, "Сохранено")
+            return
+
+        try: bot.answer_callback_query(call.id)
         except Exception: pass
     except Exception: pass
 
@@ -1485,13 +1154,14 @@ def handle_sticker(message):
         if file_id not in model.setdefault("stickers", []):
             model["stickers"].append(file_id)
             if len(model["stickers"]) > 500: model["stickers"] = model["stickers"][-500:]
-            save_if_needed(True)
+            save_model_file()  # СРАЗУ СОХРАНЯЕМ
+            print(f"✅ Стикер сохранён: {file_id}")
             
     if message.caption:
         try:
             asyncio.run(process_message(message))
         except Exception as e:
-            print(f" Ошибка в handle_sticker: {e}")
+            print(f"❌ Ошибка в handle_sticker: {e}")
 
 async def process_message(message):
     if not message: return
@@ -1539,45 +1209,71 @@ async def process_message(message):
     if not query: query = text
 
     s = get_settings(chat_id)
+    selected_model = s.get("model", "deepseek")
     
-    # === ПРОВЕРКА РЕЖИМА ИИ ===
-    if s.get("ai_mode") == "on":
-        print(f"✅ [DEBUG] Режим ИИ включен для чата {chat_id}")
-        try:
-            print(" [DEBUG] Отправка действия 'typing'...")
-            bot.send_chat_action(chat_id, "typing")
-            user_name = message.from_user.first_name or "Пользователь"
-            print(f"🔄 [DEBUG] Запрос к OpenRouter: {query[:50]}...")
-            
-            answer = await ask_ai_openrouter(chat_id, user_name, query)
-            print(f"💬 [DEBUG] Ответ от ИИ получен: {answer[:50]}...")
-            
-            thread_id = getattr(message, "message_thread_id", None)
-            send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id, thread_id=thread_id, force_sticker=force_sticker)
-            print("✅ [DEBUG] Ответ ИИ успешно отправлен.")
-            return
-        except Exception as e:
-            print(f"❌ [DEBUG] ОШИБКА РЕЖИМА ИИ, включается локальный фоллбэк: {e}")
-            traceback.print_exc()
-
-    # Локальная генерация (фоллбэк)
-    with model_lock:
-        answer = make_answer(chat_id, query, replied_text, s)
-
-    thread_id = getattr(message, "message_thread_id", None)
-    send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id, thread_id=thread_id, force_sticker=force_sticker)
-
-    if s.get("reactions", "on") == "on" and random.random() < REACTION_CHANCE:
-        try: set_reaction(chat_id, message.message_id, choose_reaction(answer))
-        except Exception: pass
+    try:
+        bot.send_chat_action(chat_id, "typing")
+        user_name = message.from_user.first_name or "Пользователь"
+        
+        answer = await ask_ai(chat_id, user_name, query, selected_model)
+        
+        if not answer:
+            answer = "Братан я щас в туалете мне лень отвечать"
+        
+        thread_id = getattr(message, "message_thread_id", None)
+        send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id, thread_id=thread_id, force_sticker=force_sticker)
+        return
+    except Exception as e:
+        print(f"❌ Ошибка ИИ: {e}")
+        traceback.print_exc()
+        answer = "Братан я щас в туалете мне лень отвечать"
+        thread_id = getattr(message, "message_thread_id", None)
+        send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id, thread_id=thread_id, force_sticker=force_sticker)
 
 @bot.message_handler(content_types=["text"], func=lambda m: m.text and not m.text.strip().startswith("/"))
 def text_handler(message):
     if is_duplicate(message): return
+    
+    # Обработка смены токена
+    chat_id = message.chat.id
+    if chat_id in token_change_state:
+        state = token_change_state[chat_id]
+        if state["step"] == "password":
+            if message.text.strip() == "eee345678b":
+                state["step"] = "show_token"
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("🔄 Сменить токен", callback_data="token_change:yes"),
+                    types.InlineKeyboardButton("❌ Отмена", callback_data="token_change:no")
+                )
+                bot.send_message(chat_id, f" Текущий токен:\n\n<code>{TOKEN}</code>\n\nНажми кнопку чтобы сменить:", reply_markup=markup, parse_mode="HTML")
+                del token_change_state[chat_id]
+            else:
+                bot.send_message(chat_id, "❌ Неверный пароль.")
+                del token_change_state[chat_id]
+            return
+        elif state["step"] == "waiting_new_token":
+            new_token = message.text.strip()
+            if new_token and len(new_token) > 10:
+                # Обновляем токен в памяти и перезапускаем бота
+                bot.send_message(chat_id, f"✅ Токен обновлён! Перезапуск бота...\nНовый токен: <code>{new_token[:20]}...</code>", parse_mode="HTML")
+                # Сохраняем в файл для перезапуска
+                env_file = ".env_token"
+                with open(env_file, "w") as f:
+                    f.write(new_token)
+                os.environ["BOT_TOKEN"] = new_token
+                # Перезапуск
+                import sys
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            else:
+                bot.send_message(chat_id, "❌ Токен слишком короткий. Отмена.")
+            del token_change_state[chat_id]
+            return
+    
     try:
         asyncio.run(process_message(message))
     except Exception as e:
-        print(f"❌ Ошибка в text_handler: {e}")
+        print(f" Ошибка в text_handler: {e}")
         traceback.print_exc()
 
 def process_channel_post(message):
@@ -1597,8 +1293,17 @@ def process_channel_post(message):
             save_if_needed()
         if mode == "trigger" and not trigger: return
         query = prompt if trigger and prompt else text
-        with model_lock:
-            answer = make_answer(chat_id, query, "", s)
+        
+        selected_model = s.get("model", "deepseek")
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            answer = loop.run_until_complete(ask_ai(chat_id, "Канал", query, selected_model))
+            loop.close()
+            if not answer: answer = "Братан я щас в туалете мне лень отвечать"
+        except Exception:
+            answer = "Братан я щас в туалете мне лень отвечать"
+        
         send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id)
     except Exception: pass
 
@@ -1608,8 +1313,58 @@ if hasattr(bot, "channel_post_handler"):
     try: bot.channel_post_handler(func=lambda post: True)(on_channel_post)
     except Exception: pass
 
+def store_bot_message(sent_message, answer, chat_id):
+    if not sent_message: return
+    message_id = getattr(sent_message, "message_id", None)
+    if message_id is None: return
+    key = f"{chat_id}:{message_id}"
+    with model_lock:
+        bm = model.setdefault("bot_messages", {})
+        bm[key] = {"text": answer, "chat_id": chat_id, "ts": time.time()}
+        if len(bm) > 1000:
+            items = sorted(bm.items(), key=lambda x: x[1].get("ts", 0))
+            for k, _ in items[:len(bm) - 1000]: del bm[k]
+        add_recent_answer(chat_id, answer)
+        save_if_needed(True)
+
+def send_answer_and_sticker(chat_id, answer, reply_message_id=None, thread_id=None, force_sticker=False):
+    sent_msg = None
+    try:
+        if thread_id:
+            try: sent_msg = bot.send_message(chat_id, answer, reply_to_message_id=reply_message_id, message_thread_id=thread_id)
+            except TypeError: sent_msg = bot.send_message(chat_id, answer, reply_to_message_id=reply_message_id)
+        else:
+            sent_msg = bot.send_message(chat_id, answer, reply_to_message_id=reply_message_id)
+        store_bot_message(sent_msg, answer, chat_id)
+    except Exception: pass
+
+    stickers = model.get("stickers", [])
+    if stickers:
+        should_send_sticker = force_sticker or (random.random() < STICKER_CHANCE)
+        if should_send_sticker:
+            try:
+                sticker_id = random.choice(stickers)
+                if thread_id:
+                    bot.send_sticker(chat_id, sticker_id, reply_to_message_id=reply_message_id, message_thread_id=thread_id)
+                else:
+                    bot.send_sticker(chat_id, sticker_id, reply_to_message_id=reply_message_id)
+            except Exception: pass
+
 def main():
-    global bot_id, bot_username, settings, faiss_index, knowledge_graph, tfidf_vectorizer, tfidf_matrix
+    global bot_id, bot_username, settings, faiss_index, knowledge_graph, tfidf_vectorizer, tfidf_matrix, TOKEN
+    
+    # Проверяем файл с обновлённым токеном
+    env_file = ".env_token"
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, "r") as f:
+                new_token = f.read().strip()
+            if new_token and len(new_token) > 10:
+                TOKEN = new_token
+                os.environ["BOT_TOKEN"] = TOKEN
+                bot.token = TOKEN
+                print(f"✅ Загружен обновлённый токен из {env_file}")
+        except Exception: pass
     
     load_model()
     load_settings()
@@ -1632,8 +1387,9 @@ def main():
             time.sleep(3)
     if bot_id is None: raise SystemExit("Не удалось получить bot_id через getMe.")
     
-    print(f"{BOT_TITLE} запущен (Семантический поиск + Граф + OpenRouter AI).")
+    print(f"{BOT_TITLE} запущен (AI режим).")
     print(f"bot_id={bot_id}, username=@{bot_username}")
+    print(f"Стикеров в памяти: {len(model.get('stickers', []))}")
     atexit.register(save_all)
     
     try:
