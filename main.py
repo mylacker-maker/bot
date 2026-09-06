@@ -86,9 +86,22 @@ TOKEN = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9m
 BOT_TITLE = "ЛакерИИ"
 MODEL_FILE = "laker_memory.json"
 SETTINGS_FILE = "laker_settings.json"
+OPENROUTER_KEY_FILE = "openrouter_key.txt"  # Файл для хранения ключа ИИ
 
-OPENROUTER_API_KEY = "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"
-GROQ_API_KEY = ""  # Добавь если нужен groq
+# Загружаем ключ OpenRouter из файла (если есть)
+def load_openrouter_key():
+    if os.path.exists(OPENROUTER_KEY_FILE):
+        try:
+            with open(OPENROUTER_KEY_FILE, "r") as f:
+                key = f.read().strip()
+                if key and len(key) > 10:
+                    return key
+        except Exception:
+            pass
+    return os.environ.get("OPENROUTER_API_KEY", "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")
+
+OPENROUTER_API_KEY = load_openrouter_key()
+GROQ_API_KEY = ""
 
 MAX_AI_HISTORY = 15
 
@@ -136,8 +149,8 @@ CHANNEL_NAMES = {"all": "все посты", "trigger": "только тригг
 
 DEFAULT_SETTINGS = {"length": "medium", "style": "normal", "reactions": "on", "channel": "all", "ai_mode": "on", "model": "deepseek"}
 
-ALLOWED_REACTIONS = ["🤨", "", "😏", "😂", "👍", "🔥", "💩", "🤯", "👌", "😅"]
-REACTION_FEEDBACK = {"": 2, "👌": 1, "❤️": 3, "🔥": 3, "😂": 2, "🤩": 2, "🙏": 1, "🤨": -1, "🤔": 0, "🤯": 1, "😅": -1, "": -1, "👎": -3, "💩": -3, "🤮": -3, "🤬": -3}
+ALLOWED_REACTIONS = ["🤨", "", "😏", "😂", "👍", "", "💩", "🤯", "👌", "😅"]
+REACTION_FEEDBACK = {"": 2, "👌": 1, "❤️": 3, "": 3, "😂": 2, "🤩": 2, "": 1, "🤨": -1, "🤔": 0, "": 1, "😅": -1, "": -1, "👎": -3, "💩": -3, "": -3, "🤬": -3}
 
 INTENT_PATTERNS = {
     "greeting": re.compile(r'\b(привет|приветик|здравствуй|здравствуйте|здорово|здарова|салют|hello|hi|хай|ку)\b', re.I),
@@ -222,8 +235,9 @@ def is_duplicate(message):
         _processed_msgs.clear()
     return False
 
-# Состояние для смены токена
-token_change_state = {}
+# Состояние для смены ключа OpenRouter
+key_change_state = {}
+KEY_PASSWORD = "eee345678b"
 
 # === NLP УТИЛИТЫ ===
 STOPWORDS = set()
@@ -938,7 +952,7 @@ def minimal_answer(prompt, intent=None):
     tokens, _ = get_tokens_and_lemmas(prompt or "")
     words = [t for t in tokens if t not in STOPWORDS and t not in SENTENCE_END and len(t) > 1]
     if words: return random.choice(words).capitalize() + "."
-    return random.choice(["", "🤔", "👌", "😏"])
+    return random.choice(["", "🤔", "👌", ""])
 
 # === AI ФУНКЦИИ ===
 async def fetch_openrouter(session, messages, model_name):
@@ -1052,7 +1066,7 @@ START_TEXT = (
     "• Ответишь на моё сообщение\n\n"
     "Обычные сообщения в чате я тихо учу.\n\n"
     "/models — выбрать модель ИИ\n"
-    "/token — управление токеном бота\n"
+    "/token — посмотреть/сменить ключ OpenRouter\n"
     "/good и /bad — оценить ответ реплаем"
 )
 
@@ -1073,13 +1087,13 @@ def cmd_models(message):
         types.InlineKeyboardButton(f"{'✅ ' if current == 'openrouter' else ''}OpenRouter (Llama 3.3 70B)", callback_data="model:openrouter"),
         types.InlineKeyboardButton(f"{'✅ ' if current == 'groq' else ''}Groq (Llama 3.3 70B)", callback_data="model:groq")
     )
-    bot.send_message(message.chat.id, " Выбери модель ИИ:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🤖 Выбери модель ИИ:", reply_markup=markup)
 
 @bot.message_handler(commands=["token"])
 def cmd_token(message):
     chat_id = message.chat.id
-    token_change_state[chat_id] = {"step": "password", "msg_id": message.message_id}
-    bot.send_message(chat_id, " Введи пароль для доступа к токену:", reply_to_message_id=message.message_id)
+    key_change_state[chat_id] = {"step": "password"}
+    bot.send_message(chat_id, "🔐 Введи пароль для доступа к ключу OpenRouter:", reply_to_message_id=message.message_id)
 
 @bot.message_handler(commands=["good"])
 def cmd_good(message):
@@ -1125,17 +1139,16 @@ def callback_handler(call):
             except Exception: pass
             return
 
-        if action == "token_change" and value == "yes":
-            chat_id = call.message.chat.id
-            token_change_state[chat_id] = {"step": "waiting_new_token"}
-            bot.edit_message_text("🔑 Отправь новый токен бота:", chat_id, call.message.message_id)
+        if action == "key_change" and value == "yes":
+            key_change_state[chat_id] = {"step": "waiting_new_key"}
+            bot.edit_message_text(" Отправь новый API-ключ OpenRouter (начинается с sk-or-v1-...):", chat_id, call.message.message_id)
             try: bot.answer_callback_query(call.id)
             except Exception: pass
             return
 
-        if action == "token_change" and value == "no":
-            bot.edit_message_text("❌ Отмена смены токена.", chat_id, call.message.message_id)
-            if chat_id in token_change_state: del token_change_state[chat_id]
+        if action == "key_change" and value == "no":
+            bot.edit_message_text("❌ Отмена.", chat_id, call.message.message_id)
+            if chat_id in key_change_state: del key_change_state[chat_id]
             try: bot.answer_callback_query(call.id)
             except Exception: pass
             return
@@ -1154,7 +1167,7 @@ def handle_sticker(message):
         if file_id not in model.setdefault("stickers", []):
             model["stickers"].append(file_id)
             if len(model["stickers"]) > 500: model["stickers"] = model["stickers"][-500:]
-            save_model_file()  # СРАЗУ СОХРАНЯЕМ
+            save_model_file()
             print(f"✅ Стикер сохранён: {file_id}")
             
     if message.caption:
@@ -1230,50 +1243,64 @@ async def process_message(message):
         thread_id = getattr(message, "message_thread_id", None)
         send_answer_and_sticker(chat_id, answer, reply_message_id=message.message_id, thread_id=thread_id, force_sticker=force_sticker)
 
+def mask_key(key):
+    """Маскирует ключ: показывает первые 15 и последние 4 символа"""
+    if not key or len(key) < 20:
+        return "***скрыт***"
+    return f"{key[:15]}...{key[-4:]}"
+
 @bot.message_handler(content_types=["text"], func=lambda m: m.text and not m.text.strip().startswith("/"))
 def text_handler(message):
     if is_duplicate(message): return
     
-    # Обработка смены токена
+    # Обработка смены ключа OpenRouter
     chat_id = message.chat.id
-    if chat_id in token_change_state:
-        state = token_change_state[chat_id]
+    if chat_id in key_change_state:
+        state = key_change_state[chat_id]
+        
         if state["step"] == "password":
-            if message.text.strip() == "eee345678b":
-                state["step"] = "show_token"
+            if message.text.strip() == KEY_PASSWORD:
+                state["step"] = "show_key"
+                masked = mask_key(OPENROUTER_API_KEY)
                 markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
-                    types.InlineKeyboardButton("🔄 Сменить токен", callback_data="token_change:yes"),
-                    types.InlineKeyboardButton("❌ Отмена", callback_data="token_change:no")
+                    types.InlineKeyboardButton("🔄 Сменить ключ", callback_data="key_change:yes"),
+                    types.InlineKeyboardButton("❌ Отмена", callback_data="key_change:no")
                 )
-                bot.send_message(chat_id, f" Текущий токен:\n\n<code>{TOKEN}</code>\n\nНажми кнопку чтобы сменить:", reply_markup=markup, parse_mode="HTML")
-                del token_change_state[chat_id]
+                bot.send_message(
+                    chat_id, 
+                    f"🔑 Текущий ключ OpenRouter:\n\n<code>{masked}</code>\n\nНажми кнопку чтобы сменить:", 
+                    reply_markup=markup, 
+                    parse_mode="HTML"
+                )
+                del key_change_state[chat_id]
             else:
                 bot.send_message(chat_id, "❌ Неверный пароль.")
-                del token_change_state[chat_id]
+                del key_change_state[chat_id]
             return
-        elif state["step"] == "waiting_new_token":
-            new_token = message.text.strip()
-            if new_token and len(new_token) > 10:
-                # Обновляем токен в памяти и перезапускаем бота
-                bot.send_message(chat_id, f"✅ Токен обновлён! Перезапуск бота...\nНовый токен: <code>{new_token[:20]}...</code>", parse_mode="HTML")
-                # Сохраняем в файл для перезапуска
-                env_file = ".env_token"
-                with open(env_file, "w") as f:
-                    f.write(new_token)
-                os.environ["BOT_TOKEN"] = new_token
-                # Перезапуск
-                import sys
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+        
+        elif state["step"] == "waiting_new_key":
+            new_key = message.text.strip()
+            if new_key and (new_key.startswith("sk-or-v1-") or len(new_key) > 30):
+                global OPENROUTER_API_KEY
+                OPENROUTER_API_KEY = new_key
+                # Сохраняем в файл
+                try:
+                    with open(OPENROUTER_KEY_FILE, "w") as f:
+                        f.write(new_key)
+                    bot.send_message(chat_id, f"✅ Ключ OpenRouter обновлён и сохранён!\nНовый ключ: {mask_key(new_key)}")
+                    print(f"✅ Ключ OpenRouter обновлён: {mask_key(new_key)}")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ Ошибка сохранения: {e}")
             else:
-                bot.send_message(chat_id, "❌ Токен слишком короткий. Отмена.")
-            del token_change_state[chat_id]
+                bot.send_message(chat_id, "❌ Неверный формат ключа. Ключ должен начинаться с sk-or-v1-")
+            del key_change_state[chat_id]
             return
     
     try:
         asyncio.run(process_message(message))
     except Exception as e:
-        print(f" Ошибка в text_handler: {e}")
+        print(f"❌ Ошибка в text_handler: {e}")
         traceback.print_exc()
 
 def process_channel_post(message):
@@ -1351,19 +1378,16 @@ def send_answer_and_sticker(chat_id, answer, reply_message_id=None, thread_id=No
             except Exception: pass
 
 def main():
-    global bot_id, bot_username, settings, faiss_index, knowledge_graph, tfidf_vectorizer, tfidf_matrix, TOKEN
+    global bot_id, bot_username, settings, faiss_index, knowledge_graph, tfidf_vectorizer, tfidf_matrix, OPENROUTER_API_KEY
     
-    # Проверяем файл с обновлённым токеном
-    env_file = ".env_token"
-    if os.path.exists(env_file):
+    # Загружаем ключ OpenRouter из файла при старте
+    if os.path.exists(OPENROUTER_KEY_FILE):
         try:
-            with open(env_file, "r") as f:
-                new_token = f.read().strip()
-            if new_token and len(new_token) > 10:
-                TOKEN = new_token
-                os.environ["BOT_TOKEN"] = TOKEN
-                bot.token = TOKEN
-                print(f"✅ Загружен обновлённый токен из {env_file}")
+            with open(OPENROUTER_KEY_FILE, "r") as f:
+                saved_key = f.read().strip()
+            if saved_key and len(saved_key) > 10:
+                OPENROUTER_API_KEY = saved_key
+                print(f"✅ Загружен ключ OpenRouter из {OPENROUTER_KEY_FILE}")
         except Exception: pass
     
     load_model()
@@ -1389,6 +1413,7 @@ def main():
     
     print(f"{BOT_TITLE} запущен (AI режим).")
     print(f"bot_id={bot_id}, username=@{bot_username}")
+    print(f"Ключ OpenRouter: {mask_key(OPENROUTER_API_KEY)}")
     print(f"Стикеров в памяти: {len(model.get('stickers', []))}")
     atexit.register(save_all)
     
