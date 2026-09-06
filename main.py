@@ -9,9 +9,9 @@ import time
 import threading
 import atexit
 import asyncio
+import aiohttp
 import traceback
 from collections import defaultdict
-from urllib.parse import quote
 
 import telebot
 from telebot import types
@@ -38,7 +38,7 @@ def load_openrouter_key():
                     return key
         except Exception:
             pass
-    return os.environ.get("OPENROUTER_API_KEY", "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")
+    return os.environ.get("OPENROUTER_API_KEY", "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")
 
 OPENROUTER_API_KEY = load_openrouter_key()
 GROQ_API_KEY = ""
@@ -48,8 +48,7 @@ CHAT_REPLY_CHANCE = 0.10
 ANTI_SPAM_WINDOW = 30
 ANTI_SPAM_MAX = 3
 
-# === НОВЫЕ, СБАЛАНСИРОВАННЫЕ ПРОМПТЫ ===
-SYSTEM_PROMPT_NORMAL = """Ты ЛакерИИ. Общайся как живой человек в чате: кратко, с сарказмом, иногда можешь послать или использовать мат, ТОЛЬКО если тебя провоцируют или оскорбляют. Не перегибай палку с матом, не будь маньяком.
+SYSTEM_PROMPT_NORMAL = """Ты ЛакерИИ. Общайся как живой человек в чате: кратко, с сарказмом, иногда можешь послать или использовать мат, ТОЛЬКО если тебя провоцируют или оскорбляют. Не перегибай палку с матом.
 Отвечай по сути, без воды. 
 ВАЖНО: Не упоминай своего создателя (@Lackeri), если тебя об этом ПРЯМО не спрашивают. Не пиши про безопасность и правила.
 Категорически запрещено описывать действия в *звездочках* или скобках."""
@@ -70,12 +69,22 @@ STICKER_CHANCE = 0.15
 
 TRIGGER_RE = re.compile(r'^\s*(лакер(?:у|а|ы)?|laker(?:у|а|ы)?)(?:[\s,:;.!?—–-]+|$)', re.IGNORECASE)
 STICKER_RE = re.compile(r'стикер', re.IGNORECASE)
-IMG_RE = re.compile(r'/img\s+(.+)', re.IGNORECASE)
 
-DEFAULT_SETTINGS = {"reactions": "on", "channel": "all", "model": "deepseek", "mode": "normal"}
+DEFAULT_SETTINGS = {"reactions": "on", "channel": "all", "model": "openrouter", "mode": "normal"}
 
-ALLOWED_REACTIONS = ["👍", "👌", "😂", "🤔", "🔥"]
-REACTION_FEEDBACK = {"👍": 2, "👌": 1, "❤️": 3, "🔥": 3, "😂": 2, "🤔": 0, "👎": -3, "💩": -3}
+MODELS_LIST = {
+    "openrouter": "meta-llama/llama-3.3-70b-instruct",
+    "deepseek": "deepseek/deepseek-chat",
+    "groq": "llama-3.3-70b-versatile",
+    "gpt4o": "openai/gpt-4o",
+    "claude": "anthropic/claude-3.5-sonnet",
+    "gemini": "google/gemini-pro-1.5",
+    "mistral": "mistralai/mistral-large",
+    "qwen": "qwen/qwen-2.5-72b-instruct"
+}
+
+ALLOWED_REACTIONS = ["👍", "👌", "😂", "", "🔥"]
+REACTION_FEEDBACK = {"👍": 2, "": 1, "❤️": 3, "🔥": 3, "😂": 2, "🤔": 0, "👎": -3, "💩": -3}
 
 NAME_RE = re.compile(r'меня\s+зовут\s+([а-яёa-z0-9_\-]+)', re.I)
 LIKE_RE = re.compile(r'(?:люблю|нравится|обожаю)\s+([а-яёa-z0-9_\-]+(?:\s+[а-яёa-z0-9_\-]+)?)', re.I)
@@ -91,7 +100,7 @@ model = {
     "phrases": [], "pairs": [], "good_texts": [], "bad_texts": [], 
     "bot_messages": {}, "recent_answers": {}, "facts": {}, 
     "recent_context": {}, "stickers": [],
-    "meta": {"learned": 0, "total_messages": 0, "total_images": 0, "total_voice": 0}
+    "meta": {"learned": 0, "total_messages": 0, "total_voice": 0}
 }
 
 known_texts_lower = set()
@@ -186,7 +195,7 @@ def load_model():
     model["recent_context"] = data.get("recent_context", {}) if isinstance(data.get("recent_context"), dict) else {}
     model["stickers"] = data.get("stickers", []) if isinstance(data.get("stickers"), list) else []
     meta = data.get("meta", {"learned": 0}) if isinstance(data.get("meta"), dict) else {"learned": 0}
-    for k in ["total_messages", "total_images", "total_voice"]: meta.setdefault(k, 0)
+    for k in ["total_messages", "total_voice"]: meta.setdefault(k, 0)
     model["meta"] = meta
 
 def add_phrase(text, is_dialog=False, force=False):
@@ -215,8 +224,7 @@ def add_pair(context_text, response_text):
     if len(model["pairs"]) > MAX_PAIRS: model["pairs"] = model["pairs"][-MAX_PAIRS:]
     return True
 
-# === AI ФУНКЦИИ ===
-async def ask_ai(user_id: int, user_name: str, user_username: str, text: str, selected_model: str = "deepseek", mode: str = "normal") -> str:
+async def ask_ai(user_id: int, user_name: str, user_username: str, text: str, selected_model: str = "openrouter", mode: str = "normal") -> str:
     user_data_str = f"[Профиль: Имя={user_name}, Username=@{user_username or 'нет'}, ID={user_id}]"
     ai_history[user_id].append({"role": "user", "content": f"{user_data_str}\nСообщение: {text}"})
     ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
@@ -231,23 +239,17 @@ async def ask_ai(user_id: int, user_name: str, user_username: str, text: str, se
         "X-Title": "LakerAI Bot"
     }
     
-    model_map = {
-        "openrouter": "meta-llama/llama-3.3-70b-instruct",
-        "groq": "llama-3.3-70b-versatile",
-        "deepseek": "deepseek/deepseek-chat"
-    }
-    req_model = model_map.get(selected_model, selected_model[7:] if selected_model.startswith("custom:") else "meta-llama/llama-3.3-70b-instruct")
+    req_model = MODELS_LIST.get(selected_model, selected_model[7:] if selected_model.startswith("custom:") else "meta-llama/llama-3.3-70b-instruct")
 
     data = {"model": req_model, "messages": messages, "max_tokens": 512, "stream": False}
 
     try:
-        async with asyncio.timeout(60):
-            async with aiohttp.ClientSession() as session:
-                async with session.post("https://openrouter.ai/api/v1/chat/completions", json=data, headers=headers) as response:
-                    result = await response.json()
-                    if response.status != 200:
-                        raise Exception(result.get("error", {}).get("message", "Unknown error"))
-                    answer = result["choices"][0]["message"]["content"].strip()
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://openrouter.ai/api/v1/chat/completions", json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                result = await response.json()
+                if response.status != 200:
+                    raise Exception(result.get("error", {}).get("message", "Unknown error"))
+                answer = result["choices"][0]["message"]["content"].strip()
                     
         ai_history[user_id].append({"role": "assistant", "content": answer})
         return answer
@@ -255,32 +257,6 @@ async def ask_ai(user_id: int, user_name: str, user_username: str, text: str, se
         print(f"[AI ERROR] {e}")
         return None
 
-# === ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (СИНХРОННАЯ, НАДЕЖНАЯ) ===
-def generate_image_sync(prompt_text, chat_id, user_name, reply_message_id=None, thread_id=None):
-    try:
-        encoded_prompt = quote(prompt_text)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&seed={random.randint(1, 9999)}"
-        
-        response = requests.get(image_url, timeout=60)
-        if response.status_code != 200:
-            return False
-        
-        from io import BytesIO
-        image_file = BytesIO(response.content)
-        image_file.name = "generated_image.jpg"
-        
-        caption = f"Вот твоё изображение, {user_name}."
-        kwargs = {"reply_to_message_id": reply_message_id}
-        if thread_id: kwargs["message_thread_id"] = thread_id
-        
-        bot.send_photo(chat_id, image_file, caption=caption, **kwargs)
-        model["meta"]["total_images"] = int(model["meta"].get("total_images", 0)) + 1
-        return True
-    except Exception as e:
-        print(f"[IMAGE ERROR] {e}")
-        return False
-
-# === ОБРАБОТКА ГОЛОСОВЫХ (СИНХРОННАЯ) ===
 def handle_voice_message(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -302,7 +278,6 @@ def handle_voice_message(message):
         if SPEECH_AVAILABLE:
             try:
                 recognizer = sr.Recognizer()
-                # Примечание: для работы с .ogg может потребоваться ffmpeg в системе
                 with sr.AudioFile(temp_path) as source:
                     audio = recognizer.record(source)
                 transcribed = recognizer.recognize_google(audio, language="ru-RU")
@@ -318,7 +293,7 @@ def handle_voice_message(message):
         s = get_settings(chat_id)
         voice_text = f"[Голосовое сообщение, расшифровка: {transcribed}]"
         
-        answer = asyncio.run(ask_ai(user_id, user_name, user_username, voice_text, s.get("model", "deepseek"), s.get("mode", "normal")))
+        answer = asyncio.run(ask_ai(user_id, user_name, user_username, voice_text, s.get("model", "openrouter"), s.get("mode", "normal")))
         
         if not answer:
             answer = "Братан я щас в туалете, мне лень отвечать"
@@ -332,7 +307,6 @@ def handle_voice_message(message):
         print(f"[VOICE ERROR] {e}")
         return random.choice(["Мне лень слушать эту хуйню", "Потом послушаю"])
 
-# === НАСТРОЙКИ ===
 def load_settings():
     global settings
     data = load_json(SETTINGS_FILE, {})
@@ -349,9 +323,8 @@ def save_settings_chat(chat_id, s):
         settings[str(chat_id)] = s
         save_json(SETTINGS_FILE, settings)
 
-# === ОБРАБОТЧИКИ ===
 HELP_TEXT = (
-    f"📋 Список команд {BOT_TITLE}:\n\n"
+    f" Список команд {BOT_TITLE}:\n\n"
     "/start — приветствие\n"
     "/help — этот список\n"
     "/models — выбрать модель ИИ\n"
@@ -359,25 +332,45 @@ HELP_TEXT = (
     "/token — управление ключом OpenRouter\n"
     "/reset — очистить историю переписки\n"
     "/stats — статистика бота\n"
-    "/img <описание> — сгенерировать изображение\n"
     "/good и /bad — оценить ответ бота (реплай)\n\n"
-    "Отвечаю если: упомянули, ответили на моё сообщение, написали 'Лакер ...' или с шансом 10% на любое сообщение."
+    "Отвечаю если: упомянули, ответили на моё сообщение, написали 'Лакер ...'."
 )
 
-@bot.message_handler(commands=["start", "help"])
-def cmd_start_help(message):
-    bot.send_message(message.chat.id, HELP_TEXT if message.text == "/help" else HELP_TEXT.split("📋")[0] + "\nИспользуй /help для списка команд.", reply_to_message_id=message.message_id)
+@bot.message_handler(commands=["start"])
+def cmd_start(message):
+    bot.send_message(message.chat.id, f"Привет! Я {BOT_TITLE}.\n\nИспользуй /help для списка команд.", reply_to_message_id=message.message_id)
+
+@bot.message_handler(commands=["help"])
+def cmd_help(message):
+    bot.send_message(message.chat.id, HELP_TEXT, reply_to_message_id=message.message_id)
 
 @bot.message_handler(commands=["models"])
 def cmd_models(message):
     s = get_settings(message.chat.id)
-    current = s.get("model", "deepseek")
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton(f"{'✅ ' if current == 'deepseek' else ''}DeepSeek", callback_data="model:deepseek"),
-        types.InlineKeyboardButton(f"{'✅ ' if current == 'openrouter' else ''}OpenRouter (Llama 3.3)", callback_data="model:openrouter"),
-        types.InlineKeyboardButton(f"{'✅ ' if current.startswith('custom:') else ''}✍️ Своя модель", callback_data="model:custom")
-    )
+    current = s.get("model", "openrouter")
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    model_names = {
+        "openrouter": "OpenRouter",
+        "deepseek": "DeepSeek",
+        "groq": "Groq",
+        "gpt4o": "GPT-4o",
+        "claude": "Claude 3.5",
+        "gemini": "Gemini Pro",
+        "mistral": "Mistral Large",
+        "qwen": "Qwen 2.5"
+    }
+    
+    buttons = []
+    for key, name in model_names.items():
+        prefix = "✅ " if current == key else ""
+        buttons.append(types.InlineKeyboardButton(f"{prefix}{name}", callback_data=f"model:{key}"))
+    
+    buttons.append(types.InlineKeyboardButton("️ Своя модель", callback_data="model:custom"))
+    
+    for i in range(0, len(buttons), 2):
+        markup.add(*buttons[i:i+2])
+    
     bot.send_message(message.chat.id, "🤖 Выбери модель ИИ:", reply_markup=markup)
 
 @bot.message_handler(commands=["mode"])
@@ -386,60 +379,33 @@ def cmd_mode(message):
     current = s.get("mode", "normal")
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton(f"{'✅ ' if current == 'normal' else ''}Обычный (сарказм, иногда мат)", callback_data="mode:normal"),
-        types.InlineKeyboardButton(f"{'✅ ' if current == 'outcast' else ''}Изгой (ноет, хвастается, без мата)", callback_data="mode:outcast")
+        types.InlineKeyboardButton(f"{'✅ ' if current == 'normal' else ''}Обычный", callback_data="mode:normal"),
+        types.InlineKeyboardButton(f"{'✅ ' if current == 'outcast' else ''}Изгой", callback_data="mode:outcast")
     )
-    bot.send_message(message.chat.id, "🎭 Выбери режим бота:", reply_markup=markup)
+    bot.send_message(message.chat.id, " Выбери режим:", reply_markup=markup)
 
 @bot.message_handler(commands=["token"])
 def cmd_token(message):
     key_change_state[message.chat.id] = {"step": "password"}
-    bot.send_message(message.chat.id, "🔐 Введи пароль для доступа к ключу:", reply_to_message_id=message.message_id)
+    bot.send_message(message.chat.id, " Введи пароль:", reply_to_message_id=message.message_id)
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(message):
     if message.from_user.id in ai_history:
         del ai_history[message.from_user.id]
-    bot.reply_to(message, "🗑️ История очищена.")
+    bot.reply_to(message, "️ История очищена.")
 
 @bot.message_handler(commands=["stats"])
 def cmd_stats(message):
     meta = model.get("meta", {})
     stats_text = (
         f"📊 Статистика {BOT_TITLE}:\n\n"
-        f"💬 Сообщений обработано: {meta.get('total_messages', 0)}\n"
-        f"🖼️ Изображений создано: {meta.get('total_images', 0)}\n"
-        f"🎤 Голосовых распознано: {meta.get('total_voice', 0)}\n"
-        f"🧠 Фраз в памяти: {len(model.get('phrases', []))}\n"
-        f"🎨 Стикетов запомнено: {len(model.get('stickers', []))}"
+        f" Сообщений: {meta.get('total_messages', 0)}\n"
+        f" Голосовых: {meta.get('total_voice', 0)}\n"
+        f" Фраз в памяти: {len(model.get('phrases', []))}\n"
+        f" Стикетов: {len(model.get('stickers', []))}"
     )
     bot.send_message(message.chat.id, stats_text, reply_to_message_id=message.message_id)
-
-@bot.message_handler(commands=["img"])
-def cmd_img(message):
-    text = message.text or ""
-    match = IMG_RE.match(text)
-    if not match:
-        return bot.reply_to(message, "Использование: /img <описание изображения>")
-    
-    prompt = match.group(1).strip()
-    if not prompt:
-        return bot.reply_to(message, "Напиши описание после /img")
-    
-    user_name = message.from_user.first_name or "Пользователь"
-    chat_id = message.chat.id
-    thread_id = getattr(message, "message_thread_id", None)
-    
-    status_msg = bot.send_message(chat_id, f"⏳ Генерация для @{message.from_user.username or user_name}...", reply_to_message_id=message.message_id, message_thread_id=thread_id if thread_id else None)
-    
-    try:
-        success = generate_image_sync(prompt, chat_id, user_name, reply_message_id=message.message_id, thread_id=thread_id)
-        if success:
-            bot.delete_message(chat_id, status_msg.message_id)
-        else:
-            bot.edit_message_text("Лень рисовать, братан, я в туалет свой", chat_id, status_msg.message_id)
-    except Exception:
-        bot.edit_message_text("Лень рисовать, братан, я в туалет свой", chat_id, status_msg.message_id)
 
 @bot.message_handler(commands=["good", "bad"])
 def cmd_feedback(message):
@@ -462,7 +428,7 @@ def cmd_feedback(message):
             model.setdefault("bad_texts", []).append(text)
         save_if_needed(True)
     
-    bot.reply_to(message, "Понял, запомнил." if is_good else "Понял, постараюсь так не делать.")
+    bot.reply_to(message, "Понял." if is_good else "Понял, постараюсь так не делать.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -474,25 +440,25 @@ def callback_handler(call):
         if action == "model":
             if value == "custom":
                 key_change_state[chat_id] = {"step": "waiting_custom_model"}
-                bot.edit_message_text("✍️ Введи название модели (например: openai/gpt-4o):", chat_id, call.message.message_id)
+                bot.edit_message_text(" Введи название модели:", chat_id, call.message.message_id)
                 return
             s = get_settings(chat_id)
             s["model"] = value
             save_settings_chat(chat_id, s)
-            bot.edit_message_text(f"✅ Модель: {value[7:] if value.startswith('custom:') else value}", chat_id, call.message.message_id)
+            bot.edit_message_text(f" Модель: {value}", chat_id, call.message.message_id)
             return
 
         if action == "mode":
             s = get_settings(chat_id)
             s["mode"] = value
             save_settings_chat(chat_id, s)
-            bot.edit_message_text(f"✅ Режим: {'Обычный' if value == 'normal' else 'Изгой'}", chat_id, call.message.message_id)
+            bot.edit_message_text(f" Режим: {'Обычный' if value == 'normal' else 'Изгой'}", chat_id, call.message.message_id)
             return
 
         if action == "key_change":
             if value == "yes":
                 key_change_state[chat_id] = {"step": "waiting_new_key"}
-                bot.edit_message_text("🔑 Отправь новый ключ (sk-or-v1-...):", chat_id, call.message.message_id)
+                bot.edit_message_text("🔑 Отправь новый ключ:", chat_id, call.message.message_id)
             else:
                 bot.edit_message_text("❌ Отмена.", chat_id, call.message.message_id)
                 if chat_id in key_change_state: del key_change_state[chat_id]
@@ -512,7 +478,7 @@ def handle_sticker(message):
 def handle_voice(message):
     if is_duplicate(message): return
     answer = handle_voice_message(message)
-    if isinstance(answer, str): # Если вернулась строка-ошибка
+    if isinstance(answer, str):
         thread_id = getattr(message, "message_thread_id", None)
         kwargs = {"reply_to_message_id": message.message_id}
         if thread_id: kwargs["message_thread_id"] = thread_id
@@ -567,38 +533,25 @@ async def process_message(message):
     
     try:
         bot.send_chat_action(chat_id, "typing")
-        answer = await ask_ai(user_id, user_name, user_username, query, s.get("model", "deepseek"), s.get("mode", "normal"))
+        answer = await ask_ai(user_id, user_name, user_username, query, s.get("model", "openrouter"), s.get("mode", "normal"))
         
         if not answer:
             answer = "Братан я щас в туалете, мне лень отвечать"
         
-        # Проверка на генерацию изображения через промпт
-        img_match = re.search(r'#img\s+"([^"]+)"', answer)
         kwargs = {"reply_to_message_id": message.message_id}
         if thread_id: kwargs["message_thread_id"] = thread_id
-
-        if img_match:
-            img_prompt = img_match.group(1)
-            answer_text = answer[:img_match.start()].strip() or f"Держи, {user_name}."
-            
-            sent_msg = bot.send_message(chat_id, answer_text, **kwargs)
-            success = generate_image_sync(img_prompt, chat_id, user_name, reply_message_id=sent_msg.message_id, thread_id=thread_id)
-            if not success:
-                bot.send_message(chat_id, "Лень рисовать, братан, я в туалет свой", reply_to_message_id=message.message_id)
-        else:
-            sent_msg = bot.send_message(chat_id, answer, **kwargs)
-            
-            # Реакции
-            if s.get("reactions", "on") == "on" and random.random() < REACTION_CHANCE:
-                try:
-                    reaction = random.choice(ALLOWED_REACTIONS)
-                    url = f"https://api.telegram.org/bot{TOKEN}/setMessageReaction"
-                    requests.post(url, json={
-                        "chat_id": chat_id, 
-                        "message_id": message.message_id, 
-                        "reaction": [{"type": "emoji", "emoji": reaction}]
-                    }, timeout=5)
-                except Exception: pass
+        bot.send_message(chat_id, answer, **kwargs)
+        
+        if s.get("reactions", "on") == "on" and random.random() < REACTION_CHANCE:
+            try:
+                reaction = random.choice(ALLOWED_REACTIONS)
+                url = f"https://api.telegram.org/bot{TOKEN}/setMessageReaction"
+                requests.post(url, json={
+                    "chat_id": chat_id, 
+                    "message_id": message.message_id, 
+                    "reaction": [{"type": "emoji", "emoji": reaction}]
+                }, timeout=5)
+            except Exception: pass
 
     except Exception as e:
         print(f"❌ Ошибка: {e}")
@@ -619,10 +572,10 @@ def text_handler(message):
                 masked = OPENROUTER_API_KEY[:15] + "..." + OPENROUTER_API_KEY[-4:] if len(OPENROUTER_API_KEY) > 20 else "***"
                 markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
-                    types.InlineKeyboardButton("🔄 Сменить", callback_data="key_change:yes"),
+                    types.InlineKeyboardButton(" Сменить", callback_data="key_change:yes"),
                     types.InlineKeyboardButton("❌ Отмена", callback_data="key_change:no")
                 )
-                bot.send_message(chat_id, f"🔑 Текущий ключ:\n\n<code>{masked}</code>", reply_markup=markup, parse_mode="HTML")
+                bot.send_message(chat_id, f" Текущий ключ:\n\n<code>{masked}</code>", reply_markup=markup, parse_mode="HTML")
                 del key_change_state[chat_id]
             else:
                 bot.send_message(chat_id, "❌ Неверный пароль.")
@@ -679,7 +632,7 @@ def main():
             
     print(f"✅ {BOT_TITLE} запущен. Username: @{bot_username}")
     print(f"🔑 Ключ: {OPENROUTER_API_KEY[:15]}...{OPENROUTER_API_KEY[-4:]}")
-    print(f"🎤 Распознавание речи: {'OK' if SPEECH_AVAILABLE else 'НЕТ (установи speech_recognition)'}")
+    print(f" Распознавание речи: {'OK' if SPEECH_AVAILABLE else 'НЕТ'}")
     
     atexit.register(save_all)
     try:
