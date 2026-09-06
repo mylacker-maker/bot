@@ -15,3 +15,4 @@ faiss-cpu
 numpy
 scikit-learn
 networkx
+aiohttp
