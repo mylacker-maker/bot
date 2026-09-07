@@ -150,7 +150,6 @@ def save_model_data():
 # === AI ФУНКЦИИ ===
 async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     global SYSTEM_PROMPT
-    # Обновляем промпт из кэша/Firebase если нужно, но для скорости берем глобальный
     user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
     ai_history[user_id].append({"role": "user", "content": f"{user_data_str}\n{text}"})
     ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
@@ -295,6 +294,7 @@ def cmd_feedback(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
+    global AVAILABLE_MODELS, SYSTEM_PROMPT
     try:
         if not call.data or ":" not in call.data: return
         action, value = call.data.split(":", 1)
@@ -308,7 +308,6 @@ def callback_handler(call):
             return
 
         if action == "del_model":
-            global AVAILABLE_MODELS
             if value in AVAILABLE_MODELS:
                 del AVAILABLE_MODELS[value]
                 db.delete(f"models/{value}")
@@ -437,7 +436,7 @@ async def process_message(message):
         # Реакции
         if random.random() < REACTION_CHANCE:
             try:
-                reaction = random.choice(["", "👌", "😂", "🤔", "🔥"])
+                reaction = random.choice(["", "👌", "😂", "🤔", ""])
                 url = f"https://api.telegram.org/bot{TOKEN}/setMessageReaction"
                 requests.post(url, json={
                     "chat_id": chat_id, "message_id": message.message_id, 
@@ -524,9 +523,19 @@ def show_token_menu(chat_id):
     bot.send_message(chat_id, f"Ключ: {masked}", reply_markup=markup)
 
 def main():
-    global bot_id, bot_username, TOKEN
+    global bot_id, bot_username, TOKEN, AVAILABLE_MODELS, SYSTEM_PROMPT
     
     load_model_data()
+    
+    # Обновляем AVAILABLE_MODELS из Firebase
+    models_from_db = db.get("models")
+    if isinstance(models_from_db, dict):
+        AVAILABLE_MODELS = models_from_db
+    
+    # Обновляем SYSTEM_PROMPT из Firebase
+    prompt_from_db = db.get("prompt")
+    if isinstance(prompt_from_db, str):
+        SYSTEM_PROMPT = prompt_from_db
     
     for _ in range(5):
         try:
