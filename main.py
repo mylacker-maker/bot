@@ -16,11 +16,13 @@ import telebot
 from telebot import types
 import requests
 
-# ТОКЕН БОТА - из переменной окружения BOT_TOKEN или дефолтный
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9mXug")
 FIREBASE_URL = "https://lackerteam-default-rtdb.firebaseio.com"
 
-# === FIREBASE REST CLIENT ===
+# Ключи ИИ из кода друга
+OPENROUTER_API_KEY_FRIEND = "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"
+GROQ_API_KEY_FRIEND = "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"
+
 class FirebaseDB:
     def __init__(self, url):
         self.url = url.rstrip('/')
@@ -38,13 +40,9 @@ class FirebaseDB:
 
 db = FirebaseDB(FIREBASE_URL)
 
-# Инициализация данных в Firebase
 def init_firebase():
-    # Ключ ИИ (OpenRouter)
     if not db.get("key"):
         db.set("key", "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")
-    
-    # Промпт
     if not db.get("prompt"):
         db.set("prompt", """Ты ЛакерИИ. Ты дружелюбный, но отвечаешь коротко и по делу. У тебя есть черный юмор.
 Иногда можешь использовать мат и сленг, если уместно. Если пользователь грубит или провоцирует — отвечай грубо в ответ, не терпи неуважения.
@@ -52,8 +50,6 @@ def init_firebase():
 Категорически запрещено описывать действия в *звездочках* или скобках.
 Если нужно сгенерировать изображение, напиши в конце ответа: #img "описание на английском"
 Если хочешь отправить стикер, напиши в конце ответа: #sticker""")
-    
-    # Модели по умолчанию
     if not db.get("models"):
         db.set("models", {
             "DeepSeek": "deepseek/deepseek-chat",
@@ -62,11 +58,13 @@ def init_firebase():
             "Claude 3.5": "anthropic/claude-3.5-sonnet"
         })
 
-# Глобальные переменные с данными
 SYSTEM_PROMPT = ""
 AVAILABLE_MODELS = {}
 chat_settings_cache = {}
 model_data = {"stickers": [], "meta": {"total_messages": 0}}
+
+# Хранилище для аиро-моделей (по аналогии с кодом друга)
+airo_models = defaultdict(lambda: "auto")
 
 MAX_AI_HISTORY = 15
 CHAT_REPLY_CHANCE = 0.10
@@ -87,13 +85,11 @@ _processed_msgs = set()
 key_change_state = {}
 debug_state = {}
 
-# Загрузка данных из Firebase
 def reload_data():
     global SYSTEM_PROMPT, AVAILABLE_MODELS
     SYSTEM_PROMPT = db.get("prompt")
     if not isinstance(SYSTEM_PROMPT, str):
         SYSTEM_PROMPT = """Ты ЛакерИИ. Отвечай коротко. Черный юмор. Мат если грубят. #img для картинок. #sticker для стикеров."""
-    
     models = db.get("models")
     AVAILABLE_MODELS = models if isinstance(models, dict) else {}
 
@@ -156,6 +152,96 @@ def load_model_data():
 def save_model_data():
     db.set("bot_data", {"stickers": model_data["stickers"], "meta": model_data["meta"]})
 
+# === AI ФУНКЦИИ ИЗ КОДА ДРУГА ===
+async def fetch_openrouter_friend(session, messages, model="meta-llama/llama-3.3-70b-instruct"):
+    data = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 4096,
+        "temperature": 0.9,
+        "stream": False
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY_FRIEND}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://telegram.org",
+        "X-Title": "LakerAI Bot"
+    }
+    async with session.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+    ) as response:
+        if response.status != 200:
+            raise Exception()
+        result = await response.json()
+        return result["choices"][0]["message"]["content"].strip()
+
+async def fetch_groq_friend(session, messages, model="llama-3.3-70b-versatile"):
+    data = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 4096,
+        "temperature": 0.9
+    }
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY_FRIEND}",
+        "Content-Type": "application/json"
+    }
+    async with session.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+    ) as response:
+        if response.status != 200:
+            raise Exception()
+        result = await response.json()
+        return result["choices"][0]["message"]["content"].strip()
+
+async def ask_ai_airo(chat_key, user_name, user_username, text):
+    """Запрос к ИИ с использованием аиро-моделей (из кода друга)"""
+    global SYSTEM_PROMPT
+    
+    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
+    ai_history[chat_key].append({"role": "user", "content": f"{user_data_str}\n{text}"})
+    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
+    
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[chat_key]
+    selected_model = airo_models[chat_key]
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            if selected_model == "auto":
+                # Авторежим: пробуем Groq, потом OpenRouter
+                try:
+                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
+                except Exception:
+                    try:
+                        answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
+                    except Exception:
+                        answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
+            
+            elif selected_model == "openrouter":
+                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
+            
+            elif selected_model == "groq":
+                try:
+                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
+                except Exception:
+                    answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
+            
+            elif selected_model == "deepseek":
+                answer = await fetch_openrouter_friend(session, messages, "deepseek/deepseek-chat")
+            
+            else:
+                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
+                
+        except Exception:
+            answer = "Не могу ответить сейчас"
+    
+    ai_history[chat_key].append({"role": "assistant", "content": answer})
+    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
+    return answer
+
+# === СТАНДАРТНЫЙ ЗАПРОС К ИИ ===
 async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     global SYSTEM_PROMPT
     user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
@@ -238,17 +324,25 @@ def cmd_models(message):
     s = get_chat_settings(chat_id)
     current = s.get("model", "")
     
-    if not AVAILABLE_MODELS:
-        return bot.send_message(chat_id, "Модели не добавлены.", reply_to_message_id=message.message_id)
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    buttons = []
-    for display_name in AVAILABLE_MODELS.keys():
-        prefix = "✅ " if current == display_name else ""
-        buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
+    # Создаем клавиатуру с кнопкой "Аиро-модели" вверху
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
-    for i in range(0, len(buttons), 2):
-        markup.add(*buttons[i:i+2])
+    # Кнопка Аиро-модели в самом верху
+    airo_button = types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu")
+    markup.add(airo_button)
+    
+    # Разделитель
+    markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
+    
+    # Остальные модели
+    if AVAILABLE_MODELS:
+        buttons = []
+        for display_name in AVAILABLE_MODELS.keys():
+            prefix = "✅ " if current == display_name else ""
+            buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
+        
+        for i in range(0, len(buttons), 2):
+            markup.add(*buttons[i:i+2])
     
     bot.send_message(chat_id, "Выбери модель:", reply_markup=markup, reply_to_message_id=message.message_id)
 
@@ -301,12 +395,92 @@ def cmd_feedback(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
-        if not call.data or ":" not in call.data: 
+        if not call.data or ":" not in call.data and call.data != "airo_models_menu" and call.data != "separator":
             bot.answer_callback_query(call.id)
             return
-        action, value = call.data.split(":", 1)
         chat_id = call.message.chat.id
 
+        # Обработка кнопки "Аиро-модели"
+        if call.data == "airo_models_menu":
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            current = airo_models.get(str(chat_id), "auto")
+            
+            markup.add(types.InlineKeyboardButton(
+                f"{'✅ ' if current == 'auto' else ''}⚡ Авторежим",
+                callback_data="airo_model:auto"
+            ))
+            markup.add(types.InlineKeyboardButton(
+                f"{'✅ ' if current == 'openrouter' else ''}🦙 OpenRouter",
+                callback_data="airo_model:openrouter"
+            ))
+            markup.add(types.InlineKeyboardButton(
+                f"{'✅ ' if current == 'groq' else ''}⚡ Groq",
+                callback_data="airo_model:groq"
+            ))
+            markup.add(types.InlineKeyboardButton(
+                f"{'✅ ' if current == 'deepseek' else ''}🧠 DeepSeek",
+                callback_data="airo_model:deepseek"
+            ))
+            markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_to_models"))
+            
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text("🚀 Аиро-модели (от друга):\nВыбери движок:", chat_id, call.message.message_id, reply_markup=markup)
+            return
+        
+        # Обработка выбора аиро-модели
+        if call.data.startswith("airo_model:"):
+            model = call.data.split(":")[1]
+            airo_models[str(chat_id)] = model
+            bot.answer_callback_query(call.id, f"Аиро-модель: {model}")
+            
+            # Показываем меню обратно
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu"))
+            markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
+            
+            s = get_chat_settings(chat_id)
+            current = s.get("model", "")
+            if AVAILABLE_MODELS:
+                buttons = []
+                for display_name in AVAILABLE_MODELS.keys():
+                    prefix = "✅ " if current == display_name else ""
+                    buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
+                for i in range(0, len(buttons), 2):
+                    markup.add(*buttons[i:i+2])
+            
+            bot.edit_message_text("✅ Аиро-модель выбрана: " + model, chat_id, call.message.message_id, reply_markup=markup)
+            return
+        
+        # Возврат к обычным моделям
+        if call.data == "back_to_models":
+            reload_data()
+            s = get_chat_settings(chat_id)
+            current = s.get("model", "")
+            
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu"))
+            markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
+            
+            if AVAILABLE_MODELS:
+                buttons = []
+                for display_name in AVAILABLE_MODELS.keys():
+                    prefix = "✅ " if current == display_name else ""
+                    buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
+                for i in range(0, len(buttons), 2):
+                    markup.add(*buttons[i:i+2])
+            
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text("Выбери модель:", chat_id, call.message.message_id, reply_markup=markup)
+            return
+        
+        # Пропускаем разделитель
+        if call.data == "separator":
+            bot.answer_callback_query(call.id)
+            return
+        
+        # Обработка обычных моделей
+        action, value = call.data.split(":", 1)
+        
         if action == "sel_model":
             s = get_chat_settings(chat_id)
             s["model"] = value
@@ -409,6 +583,61 @@ async def process_message(message):
 
     reload_data()
     s = get_chat_settings(chat_id)
+    
+    # Проверяем, используется ли аиро-модель
+    if str(chat_id) in airo_models:
+        # Используем аиро-модели
+        if trigger or mentioned or reply_to_bot:
+            user_name = from_user.first_name or "Пользователь"
+            user_username = from_user.username or ""
+            thread_id = getattr(message, "message_thread_id", None)
+            
+            try:
+                bot.send_chat_action(chat_id, "typing")
+                answer = await ask_ai_airo(str(chat_id), user_name, user_username, text)
+                
+                if not answer:
+                    answer = "Не могу ответить сейчас"
+                
+                img_match = re.search(r'#img\s+"([^"]+)"', answer)
+                sticker_flag = "#sticker" in answer
+                
+                if img_match:
+                    answer = answer[:img_match.start()].strip()
+                    if sticker_flag: answer = answer.replace("#sticker", "").strip()
+                elif sticker_flag:
+                    answer = answer.replace("#sticker", "").strip()
+
+                if not answer: answer = "."
+
+                kwargs = {"reply_to_message_id": message.message_id}
+                if thread_id: kwargs["message_thread_id"] = thread_id
+                
+                sent_msg = bot.send_message(chat_id, answer, **kwargs)
+                
+                if img_match:
+                    generate_image_sync(img_match.group(1), chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
+                if sticker_flag:
+                    send_random_sticker(chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
+
+                if random.random() < REACTION_CHANCE:
+                    try:
+                        reaction = random.choice(["", "👌", "😂", "", ""])
+                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
+                        requests.post(url, json={
+                            "chat_id": chat_id, "message_id": message.message_id, 
+                            "reaction": [{"type": "emoji", "emoji": reaction}]
+                        }, timeout=5)
+                    except: pass
+                    
+            except Exception as e:
+                print(f"Ошибка аиро: {e}")
+                kwargs = {"reply_to_message_id": message.message_id}
+                if thread_id: kwargs["message_thread_id"] = thread_id
+                bot.send_message(chat_id, "Не могу ответить сейчас", **kwargs)
+            return
+    
+    # Обычная логика с моделями из Firebase
     if not s.get("model"):
         if trigger or mentioned or reply_to_bot:
             bot.send_message(chat_id, "Сначала выбери модель через /models", reply_to_message_id=message.message_id)
@@ -564,6 +793,7 @@ def main():
     print(f"Бот запущен. @{bot_username}")
     print(f"Токен: {BOT_TOKEN[:15]}...{BOT_TOKEN[-4:]}")
     print(f"Моделей: {len(AVAILABLE_MODELS)}")
+    print(f"Аиро-модели доступны")
     
     atexit.register(save_model_data)
     try:
