@@ -63,8 +63,8 @@ AVAILABLE_MODELS = {}
 chat_settings_cache = {}
 model_data = {"stickers": [], "meta": {"total_messages": 0}}
 
-# Хранилище для аиро-моделей (по аналогии с кодом друга)
-airo_models = defaultdict(lambda: "auto")
+# Хранилище для аиро-моделей
+airo_models = defaultdict(lambda: None)
 
 MAX_AI_HISTORY = 15
 CHAT_REPLY_CHANCE = 0.10
@@ -197,7 +197,7 @@ async def fetch_groq_friend(session, messages, model="llama-3.3-70b-versatile"):
         return result["choices"][0]["message"]["content"].strip()
 
 async def ask_ai_airo(chat_key, user_name, user_username, text):
-    """Запрос к ИИ с использованием аиро-моделей (из кода друга)"""
+    """Запрос к ИИ с использованием аиро-моделей"""
     global SYSTEM_PROMPT
     
     user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
@@ -205,12 +205,11 @@ async def ask_ai_airo(chat_key, user_name, user_username, text):
     ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
     
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[chat_key]
-    selected_model = airo_models[chat_key]
+    selected_model = airo_models.get(chat_key, "auto")
     
     async with aiohttp.ClientSession() as session:
         try:
             if selected_model == "auto":
-                # Авторежим: пробуем Groq, потом OpenRouter
                 try:
                     answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
                 except Exception:
@@ -218,22 +217,17 @@ async def ask_ai_airo(chat_key, user_name, user_username, text):
                         answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
                     except Exception:
                         answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
-            
             elif selected_model == "openrouter":
                 answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-            
             elif selected_model == "groq":
                 try:
                     answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
                 except Exception:
                     answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
-            
             elif selected_model == "deepseek":
                 answer = await fetch_openrouter_friend(session, messages, "deepseek/deepseek-chat")
-            
             else:
                 answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-                
         except Exception:
             answer = "Не могу ответить сейчас"
     
@@ -322,13 +316,14 @@ def cmd_models(message):
     chat_id = message.chat.id
     reload_data()
     s = get_chat_settings(chat_id)
-    current = s.get("model", "")
+    current_normal = s.get("model", "")
+    current_airo = airo_models.get(str(chat_id), None)
     
-    # Создаем клавиатуру с кнопкой "Аиро-модели" вверху
     markup = types.InlineKeyboardMarkup(row_width=1)
     
-    # Кнопка Аиро-модели в самом верху
-    airo_button = types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu")
+    # Кнопка Аиро-модели
+    airo_prefix = "🚀 " if current_airo else ""
+    airo_button = types.InlineKeyboardButton(f"{airo_prefix}Аиро-модели", callback_data="airo_models_menu")
     markup.add(airo_button)
     
     # Разделитель
@@ -338,13 +333,15 @@ def cmd_models(message):
     if AVAILABLE_MODELS:
         buttons = []
         for display_name in AVAILABLE_MODELS.keys():
-            prefix = "✅ " if current == display_name else ""
+            prefix = "✅ " if current_normal == display_name and not current_airo else ""
             buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
         
         for i in range(0, len(buttons), 2):
             markup.add(*buttons[i:i+2])
     
-    bot.send_message(chat_id, "Выбери модель:", reply_markup=markup, reply_to_message_id=message.message_id)
+    # Показываем текущий режим
+    mode_text = " Аиро" if current_airo else (f"📦 {current_normal}" if current_normal else "❌ Не выбрана")
+    bot.send_message(chat_id, f"Выбери модель (сейчас: {mode_text}):", reply_markup=markup, reply_to_message_id=message.message_id)
 
 @bot.message_handler(commands=["add"])
 def cmd_add(message):
@@ -375,16 +372,26 @@ def cmd_token(message):
 def cmd_reset(message):
     if message.from_user.id in ai_history:
         del ai_history[message.from_user.id]
-    bot.reply_to(message, "История очищена.")
+    # Сбрасываем обе модели
+    chat_id = message.chat.id
+    if str(chat_id) in airo_models:
+        del airo_models[str(chat_id)]
+    s = get_chat_settings(chat_id)
+    if "model" in s:
+        del s["model"]
+        save_chat_settings(chat_id, s)
+    bot.reply_to(message, "История и модели очищены.")
 
 @bot.message_handler(commands=["stats"])
 def cmd_stats(message):
     meta = model_data.get("meta", {})
+    airo_count = sum(1 for v in airo_models.values() if v is not None)
     text = (
         f"Статистика:\n\n"
         f"Сообщений: {meta.get('total_messages', 0)}\n"
         f"Стикеров: {len(model_data.get('stickers', []))}\n"
-        f"Моделей: {len(AVAILABLE_MODELS)}"
+        f"Моделей в Firebase: {len(AVAILABLE_MODELS)}\n"
+        f"Чатов с Аиро: {airo_count}"
     )
     bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
 
@@ -395,7 +402,7 @@ def cmd_feedback(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
-        if not call.data or ":" not in call.data and call.data != "airo_models_menu" and call.data != "separator":
+        if not call.data or (":" not in call.data and call.data not in ["airo_models_menu", "separator", "back_to_models"]):
             bot.answer_callback_query(call.id)
             return
         chat_id = call.message.chat.id
@@ -403,14 +410,14 @@ def callback_handler(call):
         # Обработка кнопки "Аиро-модели"
         if call.data == "airo_models_menu":
             markup = types.InlineKeyboardMarkup(row_width=1)
-            current = airo_models.get(str(chat_id), "auto")
+            current = airo_models.get(str(chat_id), None)
             
             markup.add(types.InlineKeyboardButton(
                 f"{'✅ ' if current == 'auto' else ''}⚡ Авторежим",
                 callback_data="airo_model:auto"
             ))
             markup.add(types.InlineKeyboardButton(
-                f"{'✅ ' if current == 'openrouter' else ''}🦙 OpenRouter",
+                f"{'✅ ' if current == 'openrouter' else ''} OpenRouter",
                 callback_data="airo_model:openrouter"
             ))
             markup.add(types.InlineKeyboardButton(
@@ -427,50 +434,59 @@ def callback_handler(call):
             bot.edit_message_text("🚀 Аиро-модели (от друга):\nВыбери движок:", chat_id, call.message.message_id, reply_markup=markup)
             return
         
-        # Обработка выбора аиро-модели
+        # Обработка выбора аиро-модели - СБРАСЫВАЕМ ОБЫЧНУЮ МОДЕЛЬ
         if call.data.startswith("airo_model:"):
             model = call.data.split(":")[1]
             airo_models[str(chat_id)] = model
-            bot.answer_callback_query(call.id, f"Аиро-модель: {model}")
             
-            # Показываем меню обратно
+            # Сбрасываем обычную модель
+            s = get_chat_settings(chat_id)
+            if "model" in s:
+                del s["model"]
+                save_chat_settings(chat_id, s)
+            
+            bot.answer_callback_query(call.id, f"Аиро-модель: {model} (обычная сброшена)")
+            
+            # Показываем меню обратно с обновлением
+            reload_data()
             markup = types.InlineKeyboardMarkup(row_width=1)
             markup.add(types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu"))
             markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
             
-            s = get_chat_settings(chat_id)
-            current = s.get("model", "")
             if AVAILABLE_MODELS:
                 buttons = []
                 for display_name in AVAILABLE_MODELS.keys():
-                    prefix = "✅ " if current == display_name else ""
-                    buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
+                    # Обычные модели не активны, так как выбрана аиро
+                    buttons.append(types.InlineKeyboardButton(f"{display_name}", callback_data=f"sel_model:{display_name}"))
                 for i in range(0, len(buttons), 2):
                     markup.add(*buttons[i:i+2])
             
-            bot.edit_message_text("✅ Аиро-модель выбрана: " + model, chat_id, call.message.message_id, reply_markup=markup)
+            bot.edit_message_text(f"✅ Выбрана Аиро-модель: {model}\n(Обычная модель сброшена)", chat_id, call.message.message_id, reply_markup=markup)
             return
         
         # Возврат к обычным моделям
         if call.data == "back_to_models":
             reload_data()
             s = get_chat_settings(chat_id)
-            current = s.get("model", "")
+            current_normal = s.get("model", "")
+            current_airo = airo_models.get(str(chat_id), None)
             
             markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu"))
+            airo_prefix = "🚀 " if current_airo else ""
+            markup.add(types.InlineKeyboardButton(f"{airo_prefix}Аиро-модели", callback_data="airo_models_menu"))
             markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
             
             if AVAILABLE_MODELS:
                 buttons = []
                 for display_name in AVAILABLE_MODELS.keys():
-                    prefix = "✅ " if current == display_name else ""
+                    prefix = "✅ " if current_normal == display_name and not current_airo else ""
                     buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
                 for i in range(0, len(buttons), 2):
                     markup.add(*buttons[i:i+2])
             
+            mode_text = "🚀 Аиро" if current_airo else (f"📦 {current_normal}" if current_normal else "❌ Не выбрана")
             bot.answer_callback_query(call.id)
-            bot.edit_message_text("Выбери модель:", chat_id, call.message.message_id, reply_markup=markup)
+            bot.edit_message_text(f"Выбери модель (сейчас: {mode_text}):", chat_id, call.message.message_id, reply_markup=markup)
             return
         
         # Пропускаем разделитель
@@ -478,19 +494,38 @@ def callback_handler(call):
             bot.answer_callback_query(call.id)
             return
         
-        # Обработка обычных моделей
-        action, value = call.data.split(":", 1)
-        
-        if action == "sel_model":
+        # Обработка обычных моделей - СБРАСЫВАЕМ АИРО МОДЕЛЬ
+        if call.data.startswith("sel_model:"):
+            _, value = call.data.split(":", 1)
             s = get_chat_settings(chat_id)
             s["model"] = value
             save_chat_settings(chat_id, s)
+            
+            # Сбрасываем аиро-модель
+            if str(chat_id) in airo_models:
+                del airo_models[str(chat_id)]
+            
             reload_data()
-            bot.answer_callback_query(call.id, f"Выбрана: {value}")
-            bot.edit_message_text(f"Модель выбрана: {value}", chat_id, call.message.message_id)
+            bot.answer_callback_query(call.id, f"Выбрана: {value} (аиро сброшена)")
+            
+            # Показываем меню обратно
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton(" Аиро-модели", callback_data="airo_models_menu"))
+            markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
+            
+            if AVAILABLE_MODELS:
+                buttons = []
+                for display_name in AVAILABLE_MODELS.keys():
+                    prefix = "✅ " if value == display_name else ""
+                    buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
+                for i in range(0, len(buttons), 2):
+                    markup.add(*buttons[i:i+2])
+            
+            bot.edit_message_text(f"✅ Выбрана модель: {value}\n(Аиро-модель сброшена)", chat_id, call.message.message_id, reply_markup=markup)
             return
 
-        if action == "del_model":
+        if call.data.startswith("del_model:"):
+            _, value = call.data.split(":", 1)
             reload_data()
             if value in AVAILABLE_MODELS:
                 del AVAILABLE_MODELS[value]
@@ -500,13 +535,14 @@ def callback_handler(call):
             show_debug_menu(chat_id)
             return
 
-        if action == "add_model_start":
+        if call.data == "add_model_start":
             debug_state[chat_id] = {"step": "ask_name"}
             bot.answer_callback_query(call.id)
             bot.edit_message_text("Введи название модели:", chat_id, call.message.message_id)
             return
 
-        if action == "key_menu":
+        if call.data.startswith("key_menu:"):
+            _, value = call.data.split(":", 1)
             if value == "prompt":
                 key_change_state[chat_id] = {"step": "show_prompt"}
                 markup = types.InlineKeyboardMarkup(row_width=2)
@@ -521,7 +557,8 @@ def callback_handler(call):
                 show_token_menu(chat_id)
             return
 
-        if action == "key_change":
+        if call.data.startswith("key_change:"):
+            _, value = call.data.split(":", 1)
             if value == "yes":
                 key_change_state[chat_id] = {"step": "waiting_new_key"}
                 bot.answer_callback_query(call.id)
@@ -584,9 +621,11 @@ async def process_message(message):
     reload_data()
     s = get_chat_settings(chat_id)
     
-    # Проверяем, используется ли аиро-модель
-    if str(chat_id) in airo_models:
-        # Используем аиро-модели
+    # Проверяем, используется ли аиро-модель (приоритет)
+    airo_model = airo_models.get(str(chat_id), None)
+    
+    if airo_model:
+        # Используем аиро-модель
         if trigger or mentioned or reply_to_bot:
             user_name = from_user.first_name or "Пользователь"
             user_username = from_user.username or ""
