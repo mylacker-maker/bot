@@ -67,26 +67,24 @@ def init_firebase():
         })
 
 def get_bot_token():
+    # Сначала пробуем получить из Firebase
     token = db.get("token")
-    return token if token and isinstance(token, str) and len(token) > 20 else TOKEN_ENV
+    # Проверяем что токен валидный (содержит двоеточие)
+    if token and isinstance(token, str) and ":" in token and len(token) > 30:
+        return token
+    # Иначе возвращаем токен из переменных окружения
+    return TOKEN_ENV
 
+# Инициализация бота с валидным токеном
 TOKEN = get_bot_token()
 
-# Глобальные переменные с данными
-SYSTEM_PROMPT = ""
-AVAILABLE_MODELS = {}
-chat_settings_cache = {}
-
-MAX_AI_HISTORY = 15
-CHAT_REPLY_CHANCE = 0.10
-ANTI_SPAM_WINDOW = 30
-ANTI_SPAM_MAX = 3
-REACTION_CHANCE = 0.15
-
-TRIGGER_RE = re.compile(r'^\s*(лакер(?:у|а|ы)?|laker(?:у|а|ы)?)(?:[\s,:;.!?—–-]+|$)', re.IGNORECASE)
-
-ai_history = defaultdict(list)
-model_data = {"stickers": [], "meta": {"total_messages": 0}}
+# Проверка токена перед запуском
+if ":" not in TOKEN:
+    print(f" ОШИБКА: Токен бота невалидный: {TOKEN[:10]}...")
+    print("Установите токен командой: /token <ваш_токен>")
+    print("Или задайте переменную окружения BOT_TOKEN")
+    # Создаем бота с временным токеном чтобы код не падал
+    TOKEN = "000000000:InvalidTokenPleaseSetCorrectOne"
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 bot_id = None
