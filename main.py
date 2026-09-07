@@ -16,8 +16,8 @@ import telebot
 from telebot import types
 import requests
 
-TOKEN_ENV = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9mXug")
-OPENROUTER_KEY_ENV = os.environ.get("OPENROUTER_API_KEY", "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")
+# ТОКЕН БОТА - из переменной окружения BOT_TOKEN или дефолтный
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9mXug")
 FIREBASE_URL = "https://lackerteam-default-rtdb.firebaseio.com"
 
 # === FIREBASE REST CLIENT ===
@@ -40,13 +40,9 @@ db = FirebaseDB(FIREBASE_URL)
 
 # Инициализация данных в Firebase
 def init_firebase():
-    # Токен бота
-    if not db.get("token"):
-        db.set("token", TOKEN_ENV)
-    
-    # OpenRouter ключ
-    if not db.get("openrouter_key"):
-        db.set("openrouter_key", OPENROUTER_KEY_ENV)
+    # Ключ ИИ (OpenRouter)
+    if not db.get("key"):
+        db.set("key", "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")
     
     # Промпт
     if not db.get("prompt"):
@@ -66,27 +62,23 @@ def init_firebase():
             "Claude 3.5": "anthropic/claude-3.5-sonnet"
         })
 
-def get_bot_token():
-    # Сначала пробуем получить из Firebase
-    token = db.get("token")
-    # Проверяем что токен валидный (содержит двоеточие)
-    if token and isinstance(token, str) and ":" in token and len(token) > 30:
-        return token
-    # Иначе возвращаем токен из переменных окружения
-    return TOKEN_ENV
+# Глобальные переменные с данными
+SYSTEM_PROMPT = ""
+AVAILABLE_MODELS = {}
+chat_settings_cache = {}
+model_data = {"stickers": [], "meta": {"total_messages": 0}}
 
-# Инициализация бота с валидным токеном
-TOKEN = get_bot_token()
+MAX_AI_HISTORY = 15
+CHAT_REPLY_CHANCE = 0.10
+ANTI_SPAM_WINDOW = 30
+ANTI_SPAM_MAX = 3
+REACTION_CHANCE = 0.15
 
-# Проверка токена перед запуском
-if ":" not in TOKEN:
-    print(f" ОШИБКА: Токен бота невалидный: {TOKEN[:10]}...")
-    print("Установите токен командой: /token <ваш_токен>")
-    print("Или задайте переменную окружения BOT_TOKEN")
-    # Создаем бота с временным токеном чтобы код не падал
-    TOKEN = "000000000:InvalidTokenPleaseSetCorrectOne"
+TRIGGER_RE = re.compile(r'^\s*(лакер(?:у|а|ы)?|laker(?:у|а|ы)?)(?:[\s,:;.!?—–-]+|$)', re.IGNORECASE)
 
-bot = telebot.TeleBot(TOKEN, parse_mode=None)
+ai_history = defaultdict(list)
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 bot_id = None
 bot_username = None
 
@@ -173,8 +165,9 @@ async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
     model_id = AVAILABLE_MODELS.get(selected_model_key, selected_model_key)
     
+    ai_key = db.get("key") or "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"
     headers = {
-        "Authorization": f"Bearer {db.get('openrouter_key') or OPENROUTER_KEY_ENV}",
+        "Authorization": f"Bearer {ai_key.strip()}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://telegram.org",
         "X-Title": "LakerAI Bot"
@@ -230,7 +223,7 @@ def cmd_help(message):
     text = (
         "Список команд:\n\n"
         "/models - выбрать модель ИИ\n"
-        "/token - управление ключом и промптом\n"
+        "/token - управление ключом ИИ и промптом\n"
         "/reset - очистить историю переписки\n"
         "/stats - статистика бота\n"
         "/good и /bad - оценить ответ (реплай)\n\n"
@@ -241,7 +234,7 @@ def cmd_help(message):
 @bot.message_handler(commands=["models"])
 def cmd_models(message):
     chat_id = message.chat.id
-    reload_data()  # Обновляем данные
+    reload_data()
     s = get_chat_settings(chat_id)
     current = s.get("model", "")
     
@@ -358,7 +351,7 @@ def callback_handler(call):
             if value == "yes":
                 key_change_state[chat_id] = {"step": "waiting_new_key"}
                 bot.answer_callback_query(call.id)
-                bot.edit_message_text("Отправь новый ключ OpenRouter:", chat_id, call.message.message_id)
+                bot.edit_message_text("Отправь новый ключ ИИ (OpenRouter):", chat_id, call.message.message_id)
             elif value == "prompt_yes":
                 key_change_state[chat_id] = {"step": "waiting_new_prompt"}
                 bot.answer_callback_query(call.id)
@@ -411,11 +404,10 @@ async def process_message(message):
         model_data["meta"]["total_messages"] = int(model_data["meta"].get("total_messages", 0)) + 1
         if model_data["meta"]["total_messages"] % 10 == 0: save_model_data()
 
-    # Отвечаем на триггеры, упоминания, реплаи ИЛИ случайно
     should_reply = trigger or mentioned or reply_to_bot or (random.random() < CHAT_REPLY_CHANCE)
     if not should_reply: return
 
-    reload_data()  # Обновляем данные перед ответом
+    reload_data()
     s = get_chat_settings(chat_id)
     if not s.get("model"):
         if trigger or mentioned or reply_to_bot:
@@ -443,7 +435,6 @@ async def process_message(message):
             bot.send_message(chat_id, answer, **kwargs)
             return
         
-        # Обработка #img и #sticker
         img_match = re.search(r'#img\s+"([^"]+)"', answer)
         sticker_flag = "#sticker" in answer
         
@@ -465,11 +456,10 @@ async def process_message(message):
         if sticker_flag:
             send_random_sticker(chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
 
-        # Реакции
         if random.random() < REACTION_CHANCE:
             try:
-                reaction = random.choice(["", "👌", "😂", "🤔", ""])
-                url = f"https://api.telegram.org/bot{TOKEN}/setMessageReaction"
+                reaction = random.choice(["", "👌", "😂", "", ""])
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
                 requests.post(url, json={
                     "chat_id": chat_id, "message_id": message.message_id, 
                     "reaction": [{"type": "emoji", "emoji": reaction}]
@@ -488,7 +478,6 @@ def text_handler(message):
     
     chat_id = message.chat.id
     
-    # Обработка отладки
     if chat_id in debug_state:
         state = debug_state[chat_id]
         if state["step"] == "ask_name":
@@ -509,7 +498,6 @@ def text_handler(message):
             del debug_state[chat_id]
             return
 
-    # Обработка /token
     if chat_id in key_change_state:
         state = key_change_state[chat_id]
         if state["step"] == "password":
@@ -523,8 +511,8 @@ def text_handler(message):
         elif state["step"] == "waiting_new_key":
             new_key = message.text.strip()
             if new_key and len(new_key) > 20:
-                db.set("openrouter_key", new_key)
-                bot.send_message(chat_id, "Ключ обновлен.", reply_to_message_id=message.message_id)
+                db.set("key", new_key)
+                bot.send_message(chat_id, "Ключ ИИ обновлен.", reply_to_message_id=message.message_id)
             else:
                 bot.send_message(chat_id, "Неверный формат.", reply_to_message_id=message.message_id)
             del key_change_state[chat_id]
@@ -547,20 +535,20 @@ def text_handler(message):
         print(f"Ошибка text_handler: {e}")
 
 def show_token_menu(chat_id):
-    key = db.get("openrouter_key") or OPENROUTER_KEY_ENV
-    masked = key[:15] + "..." + key[-4:] if len(key) > 20 else "***"
+    ai_key = db.get("key") or "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"
+    masked = ai_key[:15] + "..." + ai_key[-4:] if len(ai_key) > 20 else "***"
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("Сменить ключ", callback_data="key_change:yes"),
+        types.InlineKeyboardButton("Сменить ключ ИИ", callback_data="key_change:yes"),
         types.InlineKeyboardButton("Промпт", callback_data="key_menu:prompt")
     )
-    bot.send_message(chat_id, f"Ключ: {masked}", reply_markup=markup)
+    bot.send_message(chat_id, f"Ключ ИИ (OpenRouter): {masked}", reply_markup=markup)
 
 def main():
-    global bot_id, bot_username, TOKEN
+    global bot_id, bot_username
     
-    init_firebase()  # Инициализация Firebase
-    reload_data()    # Загрузка данных
+    init_firebase()
+    reload_data()
     load_model_data()
     
     for _ in range(5):
@@ -574,6 +562,7 @@ def main():
             time.sleep(3)
             
     print(f"Бот запущен. @{bot_username}")
+    print(f"Токен: {BOT_TOKEN[:15]}...{BOT_TOKEN[-4:]}")
     print(f"Моделей: {len(AVAILABLE_MODELS)}")
     
     atexit.register(save_model_data)
