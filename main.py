@@ -10,7 +10,6 @@ import threading
 import atexit
 import asyncio
 import aiohttp
-import traceback
 from collections import defaultdict
 
 import telebot
@@ -39,31 +38,43 @@ class FirebaseDB:
 
 db = FirebaseDB(FIREBASE_URL)
 
-# Загрузка токена бота из Firebase
-def get_bot_token():
-    token = db.get("token")
-    if token and isinstance(token, str) and len(token) > 20:
-        return token
-    return TOKEN_ENV
-
-TOKEN = get_bot_token()
-
-# Дефолтный промпт (если в Firebase пусто)
-DEFAULT_PROMPT = """Ты ЛакерИИ. Ты дружелюбный, но отвечаешь коротко и по делу. У тебя есть черный юмор.
+# Инициализация данных в Firebase
+def init_firebase():
+    # Токен бота
+    if not db.get("token"):
+        db.set("token", TOKEN_ENV)
+    
+    # OpenRouter ключ
+    if not db.get("openrouter_key"):
+        db.set("openrouter_key", OPENROUTER_KEY_ENV)
+    
+    # Промпт
+    if not db.get("prompt"):
+        db.set("prompt", """Ты ЛакерИИ. Ты дружелюбный, но отвечаешь коротко и по делу. У тебя есть черный юмор.
 Иногда можешь использовать мат и сленг, если уместно. Если пользователь грубит или провоцирует — отвечай грубо в ответ, не терпи неуважения.
 ВАЖНО: Не упоминай создателя, если не спрашивают. Не пиши про правила и безопасность.
 Категорически запрещено описывать действия в *звездочках* или скобках.
 Если нужно сгенерировать изображение, напиши в конце ответа: #img "описание на английском"
-Если хочешь отправить стикер, напиши в конце ответа: #sticker"""
+Если хочешь отправить стикер, напиши в конце ответа: #sticker""")
+    
+    # Модели по умолчанию
+    if not db.get("models"):
+        db.set("models", {
+            "DeepSeek": "deepseek/deepseek-chat",
+            "Llama 3.3": "meta-llama/llama-3.3-70b-instruct",
+            "GPT-4o": "openai/gpt-4o",
+            "Claude 3.5": "anthropic/claude-3.5-sonnet"
+        })
 
-SYSTEM_PROMPT = db.get("prompt") or DEFAULT_PROMPT
-if not isinstance(SYSTEM_PROMPT, str): SYSTEM_PROMPT = DEFAULT_PROMPT
+def get_bot_token():
+    token = db.get("token")
+    return token if token and isinstance(token, str) and len(token) > 20 else TOKEN_ENV
 
-# Модели из Firebase
-AVAILABLE_MODELS = db.get("models")
-if not isinstance(AVAILABLE_MODELS, dict): AVAILABLE_MODELS = {}
+TOKEN = get_bot_token()
 
-# Настройки чатов (кэш)
+# Глобальные переменные с данными
+SYSTEM_PROMPT = ""
+AVAILABLE_MODELS = {}
 chat_settings_cache = {}
 
 MAX_AI_HISTORY = 15
@@ -73,11 +84,9 @@ ANTI_SPAM_MAX = 3
 REACTION_CHANCE = 0.15
 
 TRIGGER_RE = re.compile(r'^\s*(лакер(?:у|а|ы)?|laker(?:у|а|ы)?)(?:[\s,:;.!?—–-]+|$)', re.IGNORECASE)
-STICKER_RE = re.compile(r'стикер', re.IGNORECASE)
 
 ai_history = defaultdict(list)
 model_data = {"stickers": [], "meta": {"total_messages": 0}}
-known_texts_lower = set()
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 bot_id = None
@@ -86,7 +95,17 @@ bot_username = None
 model_lock = threading.Lock()
 _processed_msgs = set()
 key_change_state = {}
-debug_state = {} # Для /add
+debug_state = {}
+
+# Загрузка данных из Firebase
+def reload_data():
+    global SYSTEM_PROMPT, AVAILABLE_MODELS
+    SYSTEM_PROMPT = db.get("prompt")
+    if not isinstance(SYSTEM_PROMPT, str):
+        SYSTEM_PROMPT = """Ты ЛакерИИ. Отвечай коротко. Черный юмор. Мат если грубят. #img для картинок. #sticker для стикеров."""
+    
+    models = db.get("models")
+    AVAILABLE_MODELS = models if isinstance(models, dict) else {}
 
 def is_duplicate(message):
     mid = message.message_id
@@ -98,12 +117,12 @@ def is_duplicate(message):
 def is_spam(user_id, text):
     now = time.time()
     text_hash = hash(text.lower().strip())
-    user_msgs = [(t, h) for t, h in getattr(is_spam, 'tracker', {}).get(user_id, []) if now - t < ANTI_SPAM_WINDOW]
     if not hasattr(is_spam, 'tracker'): is_spam.tracker = {}
+    user_msgs = [(t, h) for t, h in is_spam.tracker.get(user_id, []) if now - t < ANTI_SPAM_WINDOW]
     is_spam.tracker[user_id] = user_msgs
     if sum(1 for t, h in user_msgs if h == text_hash) >= ANTI_SPAM_MAX: return True
     user_msgs.append((now, text_hash))
-    return True
+    return False
 
 def preprocess_text(text):
     if not text: return ""
@@ -137,7 +156,7 @@ def save_chat_settings(chat_id, settings):
     db.set(f"chat_settings/{chat_id}", settings)
 
 def load_model_data():
-    global model_data, known_texts_lower
+    global model_data
     data = db.get("bot_data")
     if isinstance(data, dict):
         model_data["stickers"] = data.get("stickers", [])
@@ -147,7 +166,6 @@ def load_model_data():
 def save_model_data():
     db.set("bot_data", {"stickers": model_data["stickers"], "meta": model_data["meta"]})
 
-# === AI ФУНКЦИИ ===
 async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     global SYSTEM_PROMPT
     user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
@@ -155,10 +173,10 @@ async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
-    
     model_id = AVAILABLE_MODELS.get(selected_model_key, selected_model_key)
+    
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY_ENV.strip()}",
+        "Authorization": f"Bearer {db.get('openrouter_key') or OPENROUTER_KEY_ENV}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://telegram.org",
         "X-Title": "LakerAI Bot"
@@ -177,7 +195,6 @@ async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
         print(f"[AI ERROR] {e}")
         return None
 
-# === ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ И СТИКЕРОВ ===
 def generate_image_sync(prompt_text, chat_id, reply_message_id=None, thread_id=None):
     try:
         from urllib.parse import quote
@@ -206,7 +223,6 @@ def send_random_sticker(chat_id, reply_message_id=None, thread_id=None):
         except: pass
     return False
 
-# === ОБРАБОТЧИКИ ===
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     bot.send_message(message.chat.id, f"Привет. Я {bot_username or 'ЛакерИИ'}. Напиши /help чтобы узнать команды.", reply_to_message_id=message.message_id)
@@ -216,7 +232,6 @@ def cmd_help(message):
     text = (
         "Список команд:\n\n"
         "/models - выбрать модель ИИ\n"
-        "/add <пароль> - управление моделями и отладка\n"
         "/token - управление ключом и промптом\n"
         "/reset - очистить историю переписки\n"
         "/stats - статистика бота\n"
@@ -228,17 +243,18 @@ def cmd_help(message):
 @bot.message_handler(commands=["models"])
 def cmd_models(message):
     chat_id = message.chat.id
+    reload_data()  # Обновляем данные
     s = get_chat_settings(chat_id)
     current = s.get("model", "")
     
     if not AVAILABLE_MODELS:
-        return bot.send_message(chat_id, "Модели не добавлены. Используй /add <пароль> чтобы добавить.", reply_to_message_id=message.message_id)
+        return bot.send_message(chat_id, "Модели не добавлены.", reply_to_message_id=message.message_id)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = []
-    for key, name in AVAILABLE_MODELS.items():
-        prefix = "✅ " if current == key else ""
-        buttons.append(types.InlineKeyboardButton(f"{prefix}{name}", callback_data=f"sel_model:{key}"))
+    for display_name in AVAILABLE_MODELS.keys():
+        prefix = "✅ " if current == display_name else ""
+        buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
     
     for i in range(0, len(buttons), 2):
         markup.add(*buttons[i:i+2])
@@ -249,20 +265,20 @@ def cmd_models(message):
 def cmd_add(message):
     text = message.text or ""
     parts = text.split(maxsplit=1)
-    if len(parts) < 2 or parts[1].strip() != "lackeradmin": # Пароль для входа в отладку
+    if len(parts) < 2 or parts[1].strip() != "eee345678b":
         return bot.reply_to(message, "Неверный пароль.")
     
     debug_state[message.chat.id] = {"step": "menu"}
     show_debug_menu(message.chat.id)
 
 def show_debug_menu(chat_id):
-    global AVAILABLE_MODELS
+    reload_data()
     markup = types.InlineKeyboardMarkup(row_width=1)
     if AVAILABLE_MODELS:
-        for key, name in AVAILABLE_MODELS.items():
-            markup.add(types.InlineKeyboardButton(f"Удалить: {name}", callback_data=f"del_model:{key}"))
+        for display_name in AVAILABLE_MODELS.keys():
+            markup.add(types.InlineKeyboardButton(f"Удалить: {display_name}", callback_data=f"del_model:{display_name}"))
     markup.add(types.InlineKeyboardButton("Добавить модель", callback_data="add_model_start"))
-    bot.send_message(chat_id, "Управление моделями. Нажми на модель чтобы удалить, или добавь новую:", reply_markup=markup)
+    bot.send_message(chat_id, "Управление моделями:", reply_markup=markup)
 
 @bot.message_handler(commands=["token"])
 def cmd_token(message):
@@ -289,14 +305,14 @@ def cmd_stats(message):
 
 @bot.message_handler(commands=["good", "bad"])
 def cmd_feedback(message):
-    # Упрощенная обратная связь, можно расширить при необходимости
     bot.reply_to(message, "Принято.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    global AVAILABLE_MODELS, SYSTEM_PROMPT
     try:
-        if not call.data or ":" not in call.data: return
+        if not call.data or ":" not in call.data: 
+            bot.answer_callback_query(call.id)
+            return
         action, value = call.data.split(":", 1)
         chat_id = call.message.chat.id
 
@@ -304,21 +320,25 @@ def callback_handler(call):
             s = get_chat_settings(chat_id)
             s["model"] = value
             save_chat_settings(chat_id, s)
-            bot.edit_message_text(f"Модель выбрана: {AVAILABLE_MODELS.get(value, value)}", chat_id, call.message.message_id)
+            reload_data()
+            bot.answer_callback_query(call.id, f"Выбрана: {value}")
+            bot.edit_message_text(f"Модель выбрана: {value}", chat_id, call.message.message_id)
             return
 
         if action == "del_model":
+            reload_data()
             if value in AVAILABLE_MODELS:
                 del AVAILABLE_MODELS[value]
                 db.delete(f"models/{value}")
                 db.set("models", AVAILABLE_MODELS)
-            bot.edit_message_text("Модель удалена.", chat_id, call.message.message_id)
+            bot.answer_callback_query(call.id, "Удалено")
             show_debug_menu(chat_id)
             return
 
         if action == "add_model_start":
             debug_state[chat_id] = {"step": "ask_name"}
-            bot.edit_message_text("Введи название модели (которое увидят пользователи):", chat_id, call.message.message_id)
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text("Введи название модели:", chat_id, call.message.message_id)
             return
 
         if action == "key_menu":
@@ -329,23 +349,32 @@ def callback_handler(call):
                     types.InlineKeyboardButton("Сменить", callback_data="key_change:prompt_yes"),
                     types.InlineKeyboardButton("Назад", callback_data="key_menu:back")
                 )
-                bot.edit_message_text(f"Текущий промпт:\n\n{SYSTEM_PROMPT[:800]}...", chat_id, call.message.message_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+                bot.edit_message_text(f"Текущий промпт:\n\n{SYSTEM_PROMPT[:1000]}", chat_id, call.message.message_id, reply_markup=markup)
             elif value == "back":
+                bot.answer_callback_query(call.id)
                 show_token_menu(chat_id)
             return
 
         if action == "key_change":
             if value == "yes":
                 key_change_state[chat_id] = {"step": "waiting_new_key"}
+                bot.answer_callback_query(call.id)
                 bot.edit_message_text("Отправь новый ключ OpenRouter:", chat_id, call.message.message_id)
             elif value == "prompt_yes":
                 key_change_state[chat_id] = {"step": "waiting_new_prompt"}
-                bot.edit_message_text("Отправь новый системный промпт:", chat_id, call.message.message_id)
+                bot.answer_callback_query(call.id)
+                bot.edit_message_text("Отправь новый промпт:", chat_id, call.message.message_id)
             elif value == "no":
+                bot.answer_callback_query(call.id)
                 show_token_menu(chat_id)
             return
-
-    except Exception: pass
+            
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"[CALLBACK ERROR] {e}")
+        try: bot.answer_callback_query(call.id, "Ошибка")
+        except: pass
 
 @bot.message_handler(content_types=['sticker'])
 def handle_sticker(message):
@@ -384,12 +413,13 @@ async def process_message(message):
         model_data["meta"]["total_messages"] = int(model_data["meta"].get("total_messages", 0)) + 1
         if model_data["meta"]["total_messages"] % 10 == 0: save_model_data()
 
+    # Отвечаем на триггеры, упоминания, реплаи ИЛИ случайно
     should_reply = trigger or mentioned or reply_to_bot or (random.random() < CHAT_REPLY_CHANCE)
     if not should_reply: return
 
+    reload_data()  # Обновляем данные перед ответом
     s = get_chat_settings(chat_id)
     if not s.get("model"):
-        # Если модель не выбрана, просим выбрать
         if trigger or mentioned or reply_to_bot:
             bot.send_message(chat_id, "Сначала выбери модель через /models", reply_to_message_id=message.message_id)
         return
@@ -410,6 +440,10 @@ async def process_message(message):
         
         if not answer:
             answer = random.choice(["Не могу ответить, смени модель на другую /models", "Бля я не понимаю смени мне мозги пж /models"])
+            kwargs = {"reply_to_message_id": message.message_id}
+            if thread_id: kwargs["message_thread_id"] = thread_id
+            bot.send_message(chat_id, answer, **kwargs)
+            return
         
         # Обработка #img и #sticker
         img_match = re.search(r'#img\s+"([^"]+)"', answer)
@@ -426,12 +460,12 @@ async def process_message(message):
         kwargs = {"reply_to_message_id": message.message_id}
         if thread_id: kwargs["message_thread_id"] = thread_id
         
-        bot.send_message(chat_id, answer, **kwargs)
+        sent_msg = bot.send_message(chat_id, answer, **kwargs)
         
         if img_match:
-            generate_image_sync(img_match.group(1), chat_id, reply_message_id=message.message_id, thread_id=thread_id)
+            generate_image_sync(img_match.group(1), chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
         if sticker_flag:
-            send_random_sticker(chat_id, reply_message_id=message.message_id, thread_id=thread_id)
+            send_random_sticker(chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
 
         # Реакции
         if random.random() < REACTION_CHANCE:
@@ -452,32 +486,32 @@ async def process_message(message):
 
 @bot.message_handler(content_types=["text"])
 def text_handler(message):
-    global OPENROUTER_KEY_ENV, SYSTEM_PROMPT
     if is_duplicate(message): return
     
     chat_id = message.chat.id
     
-    # Обработка отладки (/add)
+    # Обработка отладки
     if chat_id in debug_state:
         state = debug_state[chat_id]
         if state["step"] == "ask_name":
             state["name"] = message.text.strip()
             state["step"] = "ask_id"
-            bot.send_message(chat_id, "Теперь отправь ID модели (например, meta-llama/llama-3.3-70b-instruct):")
+            bot.send_message(chat_id, "Теперь отправь ID модели:", reply_to_message_id=message.message_id)
             return
         elif state["step"] == "ask_id":
             model_id = message.text.strip()
             model_name = state.get("name", "Unknown")
             if len(model_id) > 3:
+                reload_data()
                 AVAILABLE_MODELS[model_name] = model_id
                 db.set("models", AVAILABLE_MODELS)
-                bot.send_message(chat_id, f"Модель '{model_name}' добавлена.")
+                bot.send_message(chat_id, f"Модель '{model_name}' добавлена.", reply_to_message_id=message.message_id)
             else:
-                bot.send_message(chat_id, "Слишком короткий ID.")
+                bot.send_message(chat_id, "Слишком короткий ID.", reply_to_message_id=message.message_id)
             del debug_state[chat_id]
             return
 
-    # Обработка /token и промпта
+    # Обработка /token
     if chat_id in key_change_state:
         state = key_change_state[chat_id]
         if state["step"] == "password":
@@ -485,26 +519,27 @@ def text_handler(message):
                 show_token_menu(chat_id)
                 del key_change_state[chat_id]
             else:
-                bot.send_message(chat_id, "Неверный пароль.")
+                bot.send_message(chat_id, "Неверный пароль.", reply_to_message_id=message.message_id)
                 del key_change_state[chat_id]
             return
         elif state["step"] == "waiting_new_key":
             new_key = message.text.strip()
             if new_key and len(new_key) > 20:
-                OPENROUTER_KEY_ENV = new_key
-                bot.send_message(chat_id, "Ключ обновлен.")
+                db.set("openrouter_key", new_key)
+                bot.send_message(chat_id, "Ключ обновлен.", reply_to_message_id=message.message_id)
             else:
-                bot.send_message(chat_id, "Неверный формат.")
+                bot.send_message(chat_id, "Неверный формат.", reply_to_message_id=message.message_id)
             del key_change_state[chat_id]
             return
         elif state["step"] == "waiting_new_prompt":
             new_prompt = message.text.strip()
             if len(new_prompt) > 10:
+                db.set("prompt", new_prompt)
+                global SYSTEM_PROMPT
                 SYSTEM_PROMPT = new_prompt
-                db.set("prompt", SYSTEM_PROMPT)
-                bot.send_message(chat_id, "Промпт обновлен.")
+                bot.send_message(chat_id, "Промпт обновлен.", reply_to_message_id=message.message_id)
             else:
-                bot.send_message(chat_id, "Слишком короткий.")
+                bot.send_message(chat_id, "Слишком короткий.", reply_to_message_id=message.message_id)
             del key_change_state[chat_id]
             return
 
@@ -514,7 +549,8 @@ def text_handler(message):
         print(f"Ошибка text_handler: {e}")
 
 def show_token_menu(chat_id):
-    masked = OPENROUTER_KEY_ENV[:15] + "..." + OPENROUTER_KEY_ENV[-4:] if len(OPENROUTER_KEY_ENV) > 20 else "***"
+    key = db.get("openrouter_key") or OPENROUTER_KEY_ENV
+    masked = key[:15] + "..." + key[-4:] if len(key) > 20 else "***"
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("Сменить ключ", callback_data="key_change:yes"),
@@ -523,19 +559,11 @@ def show_token_menu(chat_id):
     bot.send_message(chat_id, f"Ключ: {masked}", reply_markup=markup)
 
 def main():
-    global bot_id, bot_username, TOKEN, AVAILABLE_MODELS, SYSTEM_PROMPT
+    global bot_id, bot_username, TOKEN
     
+    init_firebase()  # Инициализация Firebase
+    reload_data()    # Загрузка данных
     load_model_data()
-    
-    # Обновляем AVAILABLE_MODELS из Firebase
-    models_from_db = db.get("models")
-    if isinstance(models_from_db, dict):
-        AVAILABLE_MODELS = models_from_db
-    
-    # Обновляем SYSTEM_PROMPT из Firebase
-    prompt_from_db = db.get("prompt")
-    if isinstance(prompt_from_db, str):
-        SYSTEM_PROMPT = prompt_from_db
     
     for _ in range(5):
         try:
@@ -543,16 +571,19 @@ def main():
             bot_id = me.id
             bot_username = me.username
             break
-        except Exception:
+        except Exception as e:
+            print(f"GetMe error: {e}")
             time.sleep(3)
             
     print(f"Бот запущен. @{bot_username}")
-    print(f"Моделей загружено: {len(AVAILABLE_MODELS)}")
+    print(f"Моделей: {len(AVAILABLE_MODELS)}")
     
     atexit.register(save_model_data)
     try:
         bot.infinity_polling(skip_pending=True, allowed_updates=["message", "callback_query"])
     except KeyboardInterrupt: pass
+    except Exception as e:
+        print(f"Polling error: {e}")
     finally: save_model_data()
 
 if __name__ == "__main__":
