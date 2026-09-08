@@ -245,7 +245,121 @@ async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
     model_id = AVAILABLE_MODELS.get(selected_model_key, selected_model_key)
     
+# === AI ФУНКЦИИ ИЗ КОДА ДРУГА (С ЛОГИРОВАНИЕМ) ===
+async def fetch_openrouter_friend(session, messages, model="meta-llama/llama-3.3-70b-instruct"):
+    data = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 4096,
+        "temperature": 0.9,
+        "stream": False
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY_FRIEND}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://telegram.org",
+        "X-Title": "LakerAI Bot"
+    }
+    async with session.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+    ) as response:
+        if response.status != 200:
+            error_text = await response.text()
+            print(f"[OPENROUTER FRIEND ERROR] Status: {response.status}, Response: {error_text}")
+            raise Exception(f"OpenRouter error: {response.status}")
+        result = await response.json()
+        return result["choices"][0]["message"]["content"].strip()
+
+async def fetch_groq_friend(session, messages, model="llama-3.3-70b-versatile"):
+    data = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 4096,
+        "temperature": 0.9
+    }
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY_FRIEND}",
+        "Content-Type": "application/json"
+    }
+    async with session.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+    ) as response:
+        if response.status != 200:
+            error_text = await response.text()
+            print(f"[GROQ FRIEND ERROR] Status: {response.status}, Response: {error_text}")
+            raise Exception(f"Groq error: {response.status}")
+        result = await response.json()
+        return result["choices"][0]["message"]["content"].strip()
+
+async def ask_ai_airo(chat_key, user_name, user_username, text):
+    """Запрос к ИИ с использованием аиро-моделей"""
+    global SYSTEM_PROMPT
+    
+    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
+    ai_history[chat_key].append({"role": "user", "content": f"{user_data_str}\n{text}"})
+    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
+    
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[chat_key]
+    selected_model = airo_models.get(chat_key, "auto")
+    
+    print(f"[AIRO] Chat: {chat_key}, Model: {selected_model}")
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            if selected_model == "auto":
+                print("[AIRO AUTO] Trying Groq 70B...")
+                try:
+                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
+                    print("[AIRO AUTO] Groq 70B success")
+                except Exception as e:
+                    print(f"[AIRO AUTO] Groq 70B failed: {e}")
+                    print("[AIRO AUTO] Trying OpenRouter 70B...")
+                    try:
+                        answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
+                        print("[AIRO AUTO] OpenRouter 70B success")
+                    except Exception as e2:
+                        print(f"[AIRO AUTO] OpenRouter 70B failed: {e2}")
+                        print("[AIRO AUTO] Trying Groq 8B...")
+                        answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
+                        print("[AIRO AUTO] Groq 8B success")
+            elif selected_model == "openrouter":
+                print("[AIRO] Using OpenRouter...")
+                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
+            elif selected_model == "groq":
+                print("[AIRO] Using Groq...")
+                try:
+                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
+                except Exception:
+                    answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
+            elif selected_model == "deepseek":
+                print("[AIRO] Using DeepSeek...")
+                answer = await fetch_openrouter_friend(session, messages, "deepseek/deepseek-chat")
+            else:
+                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
+        except Exception as e:
+            print(f"[AIRO ERROR] {e}")
+            answer = "Не могу ответить сейчас"
+    
+    ai_history[chat_key].append({"role": "assistant", "content": answer})
+    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
+    return answer
+
+# === СТАНДАРТНЫЙ ЗАПРОС К ИИ (С ЛОГИРОВАНИЕМ) ===
+async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
+    global SYSTEM_PROMPT
+    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
+    ai_history[user_id].append({"role": "user", "content": f"{user_data_str}\n{text}"})
+    ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
+    model_id = AVAILABLE_MODELS.get(selected_model_key, selected_model_key)
+    
     ai_key = db.get("key") or "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"
+    
+    print(f"[AI] User: {user_id}, Model: {model_id}, Key: {ai_key[:20]}...")
+    
     headers = {
         "Authorization": f"Bearer {ai_key.strip()}",
         "Content-Type": "application/json",
@@ -257,8 +371,11 @@ async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post("https://openrouter.ai/api/v1/chat/completions", json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    print(f"[AI ERROR] Status: {response.status}, Response: {error_text}")
+                    raise Exception(f"API error: {response.status} - {error_text}")
                 result = await response.json()
-                if response.status != 200: raise Exception(result.get("error", {}).get("message", "Error"))
                 answer = result["choices"][0]["message"]["content"].strip()
         ai_history[user_id].append({"role": "assistant", "content": answer})
         return answer
