@@ -10,6 +10,7 @@ import threading
 import atexit
 import asyncio
 import aiohttp
+import uuid
 from collections import defaultdict
 
 import telebot
@@ -19,9 +20,12 @@ import requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9mXug")
 FIREBASE_URL = "https://lackerteam-default-rtdb.firebaseio.com"
 
-# Ключи ИИ из кода друга
-OPENROUTER_API_KEY_FRIEND = "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"
-GROQ_API_KEY_FRIEND = "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"
+# Данные GigaChat (можно сменить через /token)
+GIGACHAT_CLIENT_ID = "019f5576-e72c-7fa0-8060-be3a9f599e6d"
+GIGACHAT_AUTH_KEY = "MDE5ZjU1NzYtZTcyYy03ZmEwLTgwNjAtYmUzYTlmNTk5ZTZkOjEwN2Q5NDFkLWIxODUtNDEyZC04MDYzLTE4NTMxYTEzODE1MA=="
+
+HISTORIES_FILE = "histories.json"
+MAX_HISTORY = 8
 
 class FirebaseDB:
     def __init__(self, url):
@@ -34,47 +38,19 @@ class FirebaseDB:
     def set(self, path, data):
         try: requests.put(f"{self.url}/{path}.json", json=data, timeout=10)
         except: pass
-    def delete(self, path):
-        try: requests.delete(f"{self.url}/{path}.json", timeout=10)
-        except: pass
 
 db = FirebaseDB(FIREBASE_URL)
 
-def init_firebase():
-    if not db.get("key"):
-        db.set("key", "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")
-    if not db.get("prompt"):
-        db.set("prompt", """Ты ЛакерИИ. Ты дружелюбный, но отвечаешь коротко и по делу. У тебя есть черный юмор.
-Иногда можешь использовать мат и сленг, если уместно. Если пользователь грубит или провоцирует — отвечай грубо в ответ, не терпи неуважения.
-ВАЖНО: Не упоминай создателя, если не спрашивают. Не пиши про правила и безопасность.
-Категорически запрещено описывать действия в *звездочках* или скобках.
-Если нужно сгенерировать изображение, напиши в конце ответа: #img "описание на английском"
-Если хочешь отправить стикер, напиши в конце ответа: #sticker""")
-    if not db.get("models"):
-        db.set("models", {
-            "DeepSeek": "deepseek/deepseek-chat",
-            "Llama 3.3": "meta-llama/llama-3.3-70b-instruct",
-            "GPT-4o": "openai/gpt-4o",
-            "Claude 3.5": "anthropic/claude-3.5-sonnet"
-        })
-
 SYSTEM_PROMPT = ""
-AVAILABLE_MODELS = {}
 chat_settings_cache = {}
 model_data = {"stickers": [], "meta": {"total_messages": 0}}
 
-# Хранилище для аиро-моделей
-airo_models = defaultdict(lambda: None)
-
-MAX_AI_HISTORY = 15
 CHAT_REPLY_CHANCE = 0.10
 ANTI_SPAM_WINDOW = 30
 ANTI_SPAM_MAX = 3
 REACTION_CHANCE = 0.15
 
 TRIGGER_RE = re.compile(r'^\s*(лакер(?:у|а|ы)?|laker(?:у|а|ы)?)(?:[\s,:;.!?—–-]+|$)', re.IGNORECASE)
-
-ai_history = defaultdict(list)
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 bot_id = None
@@ -83,15 +59,24 @@ bot_username = None
 model_lock = threading.Lock()
 _processed_msgs = set()
 key_change_state = {}
-debug_state = {}
 
-def reload_data():
-    global SYSTEM_PROMPT, AVAILABLE_MODELS
+def init_firebase():
+    global SYSTEM_PROMPT, GIGACHAT_AUTH_KEY
+    if not db.get("prompt"):
+        db.set("prompt", """Ты ЛакерИИ. Ты дружелюбный, но отвечаешь коротко и по делу. У тебя есть черный юмор.
+Иногда можешь использовать мат и сленг, если уместно. Если пользователь грубит или провоцирует — отвечай грубо в ответ, не терпи неуважения.
+ВАЖНО: Не упоминай создателя, если не спрашивают. Не пиши про правила и безопасность.
+Категорически запрещено описывать действия в *звездочках* или скобках.
+Если нужно сгенерировать изображение, напиши в конце ответа: #img "описание на английском"
+Если хочешь отправить стикер, напиши в конце ответа: #sticker""")
+    
     SYSTEM_PROMPT = db.get("prompt")
     if not isinstance(SYSTEM_PROMPT, str):
-        SYSTEM_PROMPT = """Ты ЛакерИИ. Отвечай коротко. Черный юмор. Мат если грубят. #img для картинок. #sticker для стикеров."""
-    models = db.get("models")
-    AVAILABLE_MODELS = models if isinstance(models, dict) else {}
+        SYSTEM_PROMPT = "Ты ЛакерИИ. Отвечай коротко. Черный юмор. #img для картинок. #sticker для стикеров."
+        
+    saved_key = db.get("gigachat_key")
+    if saved_key and isinstance(saved_key, str) and len(saved_key) > 20:
+        GIGACHAT_AUTH_KEY = saved_key
 
 def is_duplicate(message):
     mid = message.message_id
@@ -131,16 +116,6 @@ def is_bot_mentioned(message):
             if text[ent.offset:ent.offset + ent.length].lower() in [uname_lower, bot_username.lower()]: return True
     return False
 
-def get_chat_settings(chat_id):
-    if chat_id not in chat_settings_cache:
-        data = db.get(f"chat_settings/{chat_id}")
-        chat_settings_cache[chat_id] = data if isinstance(data, dict) else {}
-    return chat_settings_cache[chat_id]
-
-def save_chat_settings(chat_id, settings):
-    chat_settings_cache[chat_id] = settings
-    db.set(f"chat_settings/{chat_id}", settings)
-
 def load_model_data():
     global model_data
     data = db.get("bot_data")
@@ -152,237 +127,69 @@ def load_model_data():
 def save_model_data():
     db.set("bot_data", {"stickers": model_data["stickers"], "meta": model_data["meta"]})
 
-# === AI ФУНКЦИИ ИЗ КОДА ДРУГА ===
-async def fetch_openrouter_friend(session, messages, model="meta-llama/llama-3.3-70b-instruct"):
-    data = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 4096,
-        "temperature": 0.9,
-        "stream": False
+# === GIGACHAT МЕХАНИКА ===
+async def get_gigachat_token():
+    auth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    auth_data = {"scope": "GIGACHAT_API_PERS"}
+    auth_headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {GIGACHAT_AUTH_KEY}"
     }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY_FRIEND}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://telegram.org",
-        "X-Title": "LakerAI Bot"
-    }
-    async with session.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
-    ) as response:
-        if response.status != 200:
-            raise Exception()
-        result = await response.json()
-        return result["choices"][0]["message"]["content"].strip()
-
-async def fetch_groq_friend(session, messages, model="llama-3.3-70b-versatile"):
-    data = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 4096,
-        "temperature": 0.9
-    }
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY_FRIEND}",
-        "Content-Type": "application/json"
-    }
-    async with session.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
-    ) as response:
-        if response.status != 200:
-            raise Exception()
-        result = await response.json()
-        return result["choices"][0]["message"]["content"].strip()
-
-async def ask_ai_airo(chat_key, user_name, user_username, text):
-    """Запрос к ИИ с использованием аиро-моделей"""
-    global SYSTEM_PROMPT
-    
-    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
-    ai_history[chat_key].append({"role": "user", "content": f"{user_data_str}\n{text}"})
-    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
-    
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[chat_key]
-    selected_model = airo_models.get(chat_key, "auto")
-    
     async with aiohttp.ClientSession() as session:
-        try:
-            if selected_model == "auto":
-                try:
-                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
-                except Exception:
-                    try:
-                        answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-                    except Exception:
-                        answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
-            elif selected_model == "openrouter":
-                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-            elif selected_model == "groq":
-                try:
-                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
-                except Exception:
-                    answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
-            elif selected_model == "deepseek":
-                answer = await fetch_openrouter_friend(session, messages, "deepseek/deepseek-chat")
+        async with session.post(auth_url, headers=auth_headers, data=auth_data, ssl=False) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data["access_token"]
             else:
-                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-        except Exception:
-            answer = "Не могу ответить сейчас"
-    
-    ai_history[chat_key].append({"role": "assistant", "content": answer})
-    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
-    return answer
+                raise Exception(f"Ошибка получения токена: {response.status}")
 
-# === СТАНДАРТНЫЙ ЗАПРОС К ИИ ===
-async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
-    global SYSTEM_PROMPT
-    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
-    ai_history[user_id].append({"role": "user", "content": f"{user_data_str}\n{text}"})
-    ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
-    model_id = AVAILABLE_MODELS.get(selected_model_key, selected_model_key)
-    
-# === AI ФУНКЦИИ ИЗ КОДА ДРУГА (С ЛОГИРОВАНИЕМ) ===
-async def fetch_openrouter_friend(session, messages, model="meta-llama/llama-3.3-70b-instruct"):
-    data = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 4096,
-        "temperature": 0.9,
-        "stream": False
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY_FRIEND}",
+async def send_gigachat_message(token, history):
+    chat_url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+    chat_headers = {
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://telegram.org",
-        "X-Title": "LakerAI Bot"
+        "Accept": "application/json"
     }
-    async with session.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
-    ) as response:
-        if response.status != 200:
-            error_text = await response.text()
-            print(f"[OPENROUTER FRIEND ERROR] Status: {response.status}, Response: {error_text}")
-            raise Exception(f"OpenRouter error: {response.status}")
-        result = await response.json()
-        return result["choices"][0]["message"]["content"].strip()
-
-async def fetch_groq_friend(session, messages, model="llama-3.3-70b-versatile"):
-    data = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 4096,
-        "temperature": 0.9
+    payload = {
+        "model": "GigaChat",
+        "messages": history,
+        "temperature": 0.7,
+        "max_tokens": 2000
     }
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY_FRIEND}",
-        "Content-Type": "application/json"
-    }
-    async with session.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
-    ) as response:
-        if response.status != 200:
-            error_text = await response.text()
-            print(f"[GROQ FRIEND ERROR] Status: {response.status}, Response: {error_text}")
-            raise Exception(f"Groq error: {response.status}")
-        result = await response.json()
-        return result["choices"][0]["message"]["content"].strip()
-
-async def ask_ai_airo(chat_key, user_name, user_username, text):
-    """Запрос к ИИ с использованием аиро-моделей"""
-    global SYSTEM_PROMPT
-    
-    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
-    ai_history[chat_key].append({"role": "user", "content": f"{user_data_str}\n{text}"})
-    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
-    
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[chat_key]
-    selected_model = airo_models.get(chat_key, "auto")
-    
-    print(f"[AIRO] Chat: {chat_key}, Model: {selected_model}")
-    
     async with aiohttp.ClientSession() as session:
-        try:
-            if selected_model == "auto":
-                print("[AIRO AUTO] Trying Groq 70B...")
-                try:
-                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
-                    print("[AIRO AUTO] Groq 70B success")
-                except Exception as e:
-                    print(f"[AIRO AUTO] Groq 70B failed: {e}")
-                    print("[AIRO AUTO] Trying OpenRouter 70B...")
-                    try:
-                        answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-                        print("[AIRO AUTO] OpenRouter 70B success")
-                    except Exception as e2:
-                        print(f"[AIRO AUTO] OpenRouter 70B failed: {e2}")
-                        print("[AIRO AUTO] Trying Groq 8B...")
-                        answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
-                        print("[AIRO AUTO] Groq 8B success")
-            elif selected_model == "openrouter":
-                print("[AIRO] Using OpenRouter...")
-                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-            elif selected_model == "groq":
-                print("[AIRO] Using Groq...")
-                try:
-                    answer = await fetch_groq_friend(session, messages, "llama-3.3-70b-versatile")
-                except Exception:
-                    answer = await fetch_groq_friend(session, messages, "llama-3.1-8b-instant")
-            elif selected_model == "deepseek":
-                print("[AIRO] Using DeepSeek...")
-                answer = await fetch_openrouter_friend(session, messages, "deepseek/deepseek-chat")
+        async with session.post(chat_url, headers=chat_headers, json=payload, ssl=False) as response:
+            if response.status == 200:
+                data = await response.json()
+                if "choices" in data:
+                    return data["choices"][0]["message"]["content"].strip()
+                else:
+                    return f"Ошибка: {data.get('error', {}).get('message', 'Неизвестная ошибка')}"
             else:
-                answer = await fetch_openrouter_friend(session, messages, "meta-llama/llama-3.3-70b-instruct")
-        except Exception as e:
-            print(f"[AIRO ERROR] {e}")
-            answer = "Не могу ответить сейчас"
-    
-    ai_history[chat_key].append({"role": "assistant", "content": answer})
-    ai_history[chat_key] = ai_history[chat_key][-MAX_AI_HISTORY:]
-    return answer
+                return f"Ошибка HTTP: {response.status}"
 
-# === СТАНДАРТНЫЙ ЗАПРОС К ИИ (С ЛОГИРОВАНИЕМ) ===
-async def ask_ai(user_id, user_name, user_username, text, selected_model_key):
-    global SYSTEM_PROMPT
-    user_data_str = f"[Имя={user_name}, Username=@{user_username or 'нет'}]"
-    ai_history[user_id].append({"role": "user", "content": f"{user_data_str}\n{text}"})
-    ai_history[user_id] = ai_history[user_id][-MAX_AI_HISTORY:]
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + ai_history[user_id]
-    model_id = AVAILABLE_MODELS.get(selected_model_key, selected_model_key)
-    
-    ai_key = db.get("key") or "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"
-    
-    print(f"[AI] User: {user_id}, Model: {model_id}, Key: {ai_key[:20]}...")
-    
-    headers = {
-        "Authorization": f"Bearer {ai_key.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://telegram.org",
-        "X-Title": "LakerAI Bot"
-    }
-    data = {"model": model_id, "messages": messages, "max_tokens": 512, "stream": False}
-
+def load_user_history(user_id):
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://openrouter.ai/api/v1/chat/completions", json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    print(f"[AI ERROR] Status: {response.status}, Response: {error_text}")
-                    raise Exception(f"API error: {response.status} - {error_text}")
-                result = await response.json()
-                answer = result["choices"][0]["message"]["content"].strip()
-        ai_history[user_id].append({"role": "assistant", "content": answer})
-        return answer
-    except Exception as e:
-        print(f"[AI ERROR] {e}")
-        return None
+        with open(HISTORIES_FILE, "r", encoding="utf-8") as f:
+            all_histories = json.load(f)
+    except:
+        all_histories = {}
+    
+    uid_str = str(user_id)
+    if uid_str not in all_histories:
+        all_histories[uid_str] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    
+    return all_histories[uid_str], all_histories
 
+def save_user_history(user_id, history, all_histories):
+    if len(history) > MAX_HISTORY + 1:
+        history = [history[0]] + history[-(MAX_HISTORY):]
+    all_histories[str(user_id)] = history
+    with open(HISTORIES_FILE, "w", encoding="utf-8") as f:
+        json.dump(all_histories, f, ensure_ascii=False, indent=2)
+
+# === ГЕНЕРАЦИЯ И СТИКЕРЫ ===
 def generate_image_sync(prompt_text, chat_id, reply_message_id=None, thread_id=None):
     try:
         from urllib.parse import quote
@@ -411,6 +218,7 @@ def send_random_sticker(chat_id, reply_message_id=None, thread_id=None):
         except: pass
     return False
 
+# === ОБРАБОТЧИКИ ===
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     bot.send_message(message.chat.id, f"Привет. Я {bot_username or 'ЛакерИИ'}. Напиши /help чтобы узнать команды.", reply_to_message_id=message.message_id)
@@ -419,65 +227,13 @@ def cmd_start(message):
 def cmd_help(message):
     text = (
         "Список команд:\n\n"
-        "/models - выбрать модель ИИ\n"
-        "/token - управление ключом ИИ и промптом\n"
+        "/token - управление ключом GigaChat и промптом\n"
         "/reset - очистить историю переписки\n"
         "/stats - статистика бота\n"
         "/good и /bad - оценить ответ (реплай)\n\n"
         "Отвечаю на упоминания, реплаи, триггер 'Лакер' или с шансом 10% на любое сообщение."
     )
     bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
-
-@bot.message_handler(commands=["models"])
-def cmd_models(message):
-    chat_id = message.chat.id
-    reload_data()
-    s = get_chat_settings(chat_id)
-    current_normal = s.get("model", "")
-    current_airo = airo_models.get(str(chat_id), None)
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
-    # Кнопка Аиро-модели
-    airo_prefix = "🚀 " if current_airo else ""
-    airo_button = types.InlineKeyboardButton(f"{airo_prefix}Аиро-модели", callback_data="airo_models_menu")
-    markup.add(airo_button)
-    
-    # Разделитель
-    markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
-    
-    # Остальные модели
-    if AVAILABLE_MODELS:
-        buttons = []
-        for display_name in AVAILABLE_MODELS.keys():
-            prefix = "✅ " if current_normal == display_name and not current_airo else ""
-            buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
-        
-        for i in range(0, len(buttons), 2):
-            markup.add(*buttons[i:i+2])
-    
-    # Показываем текущий режим
-    mode_text = " Аиро" if current_airo else (f"📦 {current_normal}" if current_normal else "❌ Не выбрана")
-    bot.send_message(chat_id, f"Выбери модель (сейчас: {mode_text}):", reply_markup=markup, reply_to_message_id=message.message_id)
-
-@bot.message_handler(commands=["add"])
-def cmd_add(message):
-    text = message.text or ""
-    parts = text.split(maxsplit=1)
-    if len(parts) < 2 or parts[1].strip() != "eee345678b":
-        return bot.reply_to(message, "Неверный пароль.")
-    
-    debug_state[message.chat.id] = {"step": "menu"}
-    show_debug_menu(message.chat.id)
-
-def show_debug_menu(chat_id):
-    reload_data()
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    if AVAILABLE_MODELS:
-        for display_name in AVAILABLE_MODELS.keys():
-            markup.add(types.InlineKeyboardButton(f"Удалить: {display_name}", callback_data=f"del_model:{display_name}"))
-    markup.add(types.InlineKeyboardButton("Добавить модель", callback_data="add_model_start"))
-    bot.send_message(chat_id, "Управление моделями:", reply_markup=markup)
 
 @bot.message_handler(commands=["token"])
 def cmd_token(message):
@@ -487,28 +243,25 @@ def cmd_token(message):
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(message):
-    if message.from_user.id in ai_history:
-        del ai_history[message.from_user.id]
-    # Сбрасываем обе модели
-    chat_id = message.chat.id
-    if str(chat_id) in airo_models:
-        del airo_models[str(chat_id)]
-    s = get_chat_settings(chat_id)
-    if "model" in s:
-        del s["model"]
-        save_chat_settings(chat_id, s)
-    bot.reply_to(message, "История и модели очищены.")
+    user_id = message.from_user.id
+    try:
+        with open(HISTORIES_FILE, "r", encoding="utf-8") as f:
+            all_histories = json.load(f)
+        if str(user_id) in all_histories:
+            del all_histories[str(user_id)]
+            with open(HISTORIES_FILE, "w", encoding="utf-8") as f:
+                json.dump(all_histories, f, ensure_ascii=False, indent=2)
+        bot.reply_to(message, "История очищена.")
+    except:
+        bot.reply_to(message, "История очищена.")
 
 @bot.message_handler(commands=["stats"])
 def cmd_stats(message):
     meta = model_data.get("meta", {})
-    airo_count = sum(1 for v in airo_models.values() if v is not None)
     text = (
         f"Статистика:\n\n"
         f"Сообщений: {meta.get('total_messages', 0)}\n"
-        f"Стикеров: {len(model_data.get('stickers', []))}\n"
-        f"Моделей в Firebase: {len(AVAILABLE_MODELS)}\n"
-        f"Чатов с Аиро: {airo_count}"
+        f"Стикеров: {len(model_data.get('stickers', []))}"
     )
     bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
 
@@ -519,147 +272,13 @@ def cmd_feedback(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
-        if not call.data or (":" not in call.data and call.data not in ["airo_models_menu", "separator", "back_to_models"]):
+        if not call.data or ":" not in call.data: 
             bot.answer_callback_query(call.id)
             return
+        action, value = call.data.split(":", 1)
         chat_id = call.message.chat.id
 
-        # Обработка кнопки "Аиро-модели"
-        if call.data == "airo_models_menu":
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            current = airo_models.get(str(chat_id), None)
-            
-            markup.add(types.InlineKeyboardButton(
-                f"{'✅ ' if current == 'auto' else ''}⚡ Авторежим",
-                callback_data="airo_model:auto"
-            ))
-            markup.add(types.InlineKeyboardButton(
-                f"{'✅ ' if current == 'openrouter' else ''} OpenRouter",
-                callback_data="airo_model:openrouter"
-            ))
-            markup.add(types.InlineKeyboardButton(
-                f"{'✅ ' if current == 'groq' else ''}⚡ Groq",
-                callback_data="airo_model:groq"
-            ))
-            markup.add(types.InlineKeyboardButton(
-                f"{'✅ ' if current == 'deepseek' else ''}🧠 DeepSeek",
-                callback_data="airo_model:deepseek"
-            ))
-            markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_to_models"))
-            
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text("🚀 Аиро-модели (от друга):\nВыбери движок:", chat_id, call.message.message_id, reply_markup=markup)
-            return
-        
-        # Обработка выбора аиро-модели - СБРАСЫВАЕМ ОБЫЧНУЮ МОДЕЛЬ
-        if call.data.startswith("airo_model:"):
-            model = call.data.split(":")[1]
-            airo_models[str(chat_id)] = model
-            
-            # Сбрасываем обычную модель
-            s = get_chat_settings(chat_id)
-            if "model" in s:
-                del s["model"]
-                save_chat_settings(chat_id, s)
-            
-            bot.answer_callback_query(call.id, f"Аиро-модель: {model} (обычная сброшена)")
-            
-            # Показываем меню обратно с обновлением
-            reload_data()
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(types.InlineKeyboardButton("🚀 Аиро-модели", callback_data="airo_models_menu"))
-            markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
-            
-            if AVAILABLE_MODELS:
-                buttons = []
-                for display_name in AVAILABLE_MODELS.keys():
-                    # Обычные модели не активны, так как выбрана аиро
-                    buttons.append(types.InlineKeyboardButton(f"{display_name}", callback_data=f"sel_model:{display_name}"))
-                for i in range(0, len(buttons), 2):
-                    markup.add(*buttons[i:i+2])
-            
-            bot.edit_message_text(f"✅ Выбрана Аиро-модель: {model}\n(Обычная модель сброшена)", chat_id, call.message.message_id, reply_markup=markup)
-            return
-        
-        # Возврат к обычным моделям
-        if call.data == "back_to_models":
-            reload_data()
-            s = get_chat_settings(chat_id)
-            current_normal = s.get("model", "")
-            current_airo = airo_models.get(str(chat_id), None)
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            airo_prefix = "🚀 " if current_airo else ""
-            markup.add(types.InlineKeyboardButton(f"{airo_prefix}Аиро-модели", callback_data="airo_models_menu"))
-            markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
-            
-            if AVAILABLE_MODELS:
-                buttons = []
-                for display_name in AVAILABLE_MODELS.keys():
-                    prefix = "✅ " if current_normal == display_name and not current_airo else ""
-                    buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
-                for i in range(0, len(buttons), 2):
-                    markup.add(*buttons[i:i+2])
-            
-            mode_text = "🚀 Аиро" if current_airo else (f"📦 {current_normal}" if current_normal else "❌ Не выбрана")
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(f"Выбери модель (сейчас: {mode_text}):", chat_id, call.message.message_id, reply_markup=markup)
-            return
-        
-        # Пропускаем разделитель
-        if call.data == "separator":
-            bot.answer_callback_query(call.id)
-            return
-        
-        # Обработка обычных моделей - СБРАСЫВАЕМ АИРО МОДЕЛЬ
-        if call.data.startswith("sel_model:"):
-            _, value = call.data.split(":", 1)
-            s = get_chat_settings(chat_id)
-            s["model"] = value
-            save_chat_settings(chat_id, s)
-            
-            # Сбрасываем аиро-модель
-            if str(chat_id) in airo_models:
-                del airo_models[str(chat_id)]
-            
-            reload_data()
-            bot.answer_callback_query(call.id, f"Выбрана: {value} (аиро сброшена)")
-            
-            # Показываем меню обратно
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(types.InlineKeyboardButton(" Аиро-модели", callback_data="airo_models_menu"))
-            markup.add(types.InlineKeyboardButton("──────────────", callback_data="separator"))
-            
-            if AVAILABLE_MODELS:
-                buttons = []
-                for display_name in AVAILABLE_MODELS.keys():
-                    prefix = "✅ " if value == display_name else ""
-                    buttons.append(types.InlineKeyboardButton(f"{prefix}{display_name}", callback_data=f"sel_model:{display_name}"))
-                for i in range(0, len(buttons), 2):
-                    markup.add(*buttons[i:i+2])
-            
-            bot.edit_message_text(f"✅ Выбрана модель: {value}\n(Аиро-модель сброшена)", chat_id, call.message.message_id, reply_markup=markup)
-            return
-
-        if call.data.startswith("del_model:"):
-            _, value = call.data.split(":", 1)
-            reload_data()
-            if value in AVAILABLE_MODELS:
-                del AVAILABLE_MODELS[value]
-                db.delete(f"models/{value}")
-                db.set("models", AVAILABLE_MODELS)
-            bot.answer_callback_query(call.id, "Удалено")
-            show_debug_menu(chat_id)
-            return
-
-        if call.data == "add_model_start":
-            debug_state[chat_id] = {"step": "ask_name"}
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text("Введи название модели:", chat_id, call.message.message_id)
-            return
-
-        if call.data.startswith("key_menu:"):
-            _, value = call.data.split(":", 1)
+        if action == "key_menu":
             if value == "prompt":
                 key_change_state[chat_id] = {"step": "show_prompt"}
                 markup = types.InlineKeyboardMarkup(row_width=2)
@@ -674,12 +293,11 @@ def callback_handler(call):
                 show_token_menu(chat_id)
             return
 
-        if call.data.startswith("key_change:"):
-            _, value = call.data.split(":", 1)
-            if value == "yes":
+        if action == "key_change":
+            if value == "gigachat_yes":
                 key_change_state[chat_id] = {"step": "waiting_new_key"}
                 bot.answer_callback_query(call.id)
-                bot.edit_message_text("Отправь новый ключ ИИ (OpenRouter):", chat_id, call.message.message_id)
+                bot.edit_message_text("Отправь новый AUTH_KEY для GigaChat:", chat_id, call.message.message_id)
             elif value == "prompt_yes":
                 key_change_state[chat_id] = {"step": "waiting_new_prompt"}
                 bot.answer_callback_query(call.id)
@@ -735,70 +353,6 @@ async def process_message(message):
     should_reply = trigger or mentioned or reply_to_bot or (random.random() < CHAT_REPLY_CHANCE)
     if not should_reply: return
 
-    reload_data()
-    s = get_chat_settings(chat_id)
-    
-    # Проверяем, используется ли аиро-модель (приоритет)
-    airo_model = airo_models.get(str(chat_id), None)
-    
-    if airo_model:
-        # Используем аиро-модель
-        if trigger or mentioned or reply_to_bot:
-            user_name = from_user.first_name or "Пользователь"
-            user_username = from_user.username or ""
-            thread_id = getattr(message, "message_thread_id", None)
-            
-            try:
-                bot.send_chat_action(chat_id, "typing")
-                answer = await ask_ai_airo(str(chat_id), user_name, user_username, text)
-                
-                if not answer:
-                    answer = "Не могу ответить сейчас"
-                
-                img_match = re.search(r'#img\s+"([^"]+)"', answer)
-                sticker_flag = "#sticker" in answer
-                
-                if img_match:
-                    answer = answer[:img_match.start()].strip()
-                    if sticker_flag: answer = answer.replace("#sticker", "").strip()
-                elif sticker_flag:
-                    answer = answer.replace("#sticker", "").strip()
-
-                if not answer: answer = "."
-
-                kwargs = {"reply_to_message_id": message.message_id}
-                if thread_id: kwargs["message_thread_id"] = thread_id
-                
-                sent_msg = bot.send_message(chat_id, answer, **kwargs)
-                
-                if img_match:
-                    generate_image_sync(img_match.group(1), chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
-                if sticker_flag:
-                    send_random_sticker(chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
-
-                if random.random() < REACTION_CHANCE:
-                    try:
-                        reaction = random.choice(["", "👌", "😂", "", ""])
-                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
-                        requests.post(url, json={
-                            "chat_id": chat_id, "message_id": message.message_id, 
-                            "reaction": [{"type": "emoji", "emoji": reaction}]
-                        }, timeout=5)
-                    except: pass
-                    
-            except Exception as e:
-                print(f"Ошибка аиро: {e}")
-                kwargs = {"reply_to_message_id": message.message_id}
-                if thread_id: kwargs["message_thread_id"] = thread_id
-                bot.send_message(chat_id, "Не могу ответить сейчас", **kwargs)
-            return
-    
-    # Обычная логика с моделями из Firebase
-    if not s.get("model"):
-        if trigger or mentioned or reply_to_bot:
-            bot.send_message(chat_id, "Сначала выбери модель через /models", reply_to_message_id=message.message_id)
-        return
-
     query = prompt if (trigger and prompt) else text
     if mentioned and not trigger and bot_username:
         query = query.replace("@" + bot_username, "").replace(bot_username, "").strip()
@@ -811,15 +365,29 @@ async def process_message(message):
     
     try:
         bot.send_chat_action(chat_id, "typing")
-        answer = await ask_ai(user_id, user_name, user_username, query, s["model"])
         
-        if not answer:
-            answer = random.choice(["Не могу ответить, смени модель на другую /models", "Бля я не понимаю смени мне мозги пж /models"])
-            kwargs = {"reply_to_message_id": message.message_id}
-            if thread_id: kwargs["message_thread_id"] = thread_id
-            bot.send_message(chat_id, answer, **kwargs)
-            return
+        # 1. Получаем токен
+        token = await get_gigachat_token()
         
+        # 2. Загружаем историю
+        user_history, all_histories = load_user_history(user_id)
+        
+        # Обновляем системный промпт в истории, если он изменился
+        if user_history and user_history[0]["role"] == "system":
+            user_history[0]["content"] = SYSTEM_PROMPT
+            
+        user_history.append({"role": "user", "content": query})
+        
+        # 3. Отправляем запрос
+        answer = await send_gigachat_message(token, user_history)
+        
+        if not answer or answer.startswith("Ошибка"):
+            answer = "Покою 67🤣🤣🤣 я сдох!"
+            
+        user_history.append({"role": "assistant", "content": answer})
+        save_user_history(user_id, user_history, all_histories)
+        
+        # 4. Обработка #img и #sticker
         img_match = re.search(r'#img\s+"([^"]+)"', answer)
         sticker_flag = "#sticker" in answer
         
@@ -841,9 +409,10 @@ async def process_message(message):
         if sticker_flag:
             send_random_sticker(chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
 
+        # 5. Реакции
         if random.random() < REACTION_CHANCE:
             try:
-                reaction = random.choice(["", "👌", "😂", "", ""])
+                reaction = random.choice(["👍", "👌", "😂", "🤔", "🔥"])
                 url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
                 requests.post(url, json={
                     "chat_id": chat_id, "message_id": message.message_id, 
@@ -855,34 +424,15 @@ async def process_message(message):
         print(f"Ошибка: {e}")
         kwargs = {"reply_to_message_id": message.message_id}
         if thread_id: kwargs["message_thread_id"] = thread_id
-        bot.send_message(chat_id, random.choice(["Не могу ответить, смени модель на другую /models", "Бля я не понимаю смени мне мозги пж /models"]), **kwargs)
+        bot.send_message(chat_id, "Покою 67🤣🤣🤣 я сдох!", **kwargs)
 
 @bot.message_handler(content_types=["text"])
 def text_handler(message):
+    global GIGACHAT_AUTH_KEY, SYSTEM_PROMPT
     if is_duplicate(message): return
     
     chat_id = message.chat.id
     
-    if chat_id in debug_state:
-        state = debug_state[chat_id]
-        if state["step"] == "ask_name":
-            state["name"] = message.text.strip()
-            state["step"] = "ask_id"
-            bot.send_message(chat_id, "Теперь отправь ID модели:", reply_to_message_id=message.message_id)
-            return
-        elif state["step"] == "ask_id":
-            model_id = message.text.strip()
-            model_name = state.get("name", "Unknown")
-            if len(model_id) > 3:
-                reload_data()
-                AVAILABLE_MODELS[model_name] = model_id
-                db.set("models", AVAILABLE_MODELS)
-                bot.send_message(chat_id, f"Модель '{model_name}' добавлена.", reply_to_message_id=message.message_id)
-            else:
-                bot.send_message(chat_id, "Слишком короткий ID.", reply_to_message_id=message.message_id)
-            del debug_state[chat_id]
-            return
-
     if chat_id in key_change_state:
         state = key_change_state[chat_id]
         if state["step"] == "password":
@@ -896,8 +446,9 @@ def text_handler(message):
         elif state["step"] == "waiting_new_key":
             new_key = message.text.strip()
             if new_key and len(new_key) > 20:
-                db.set("key", new_key)
-                bot.send_message(chat_id, "Ключ ИИ обновлен.", reply_to_message_id=message.message_id)
+                GIGACHAT_AUTH_KEY = new_key
+                db.set("gigachat_key", new_key)
+                bot.send_message(chat_id, "Ключ GigaChat обновлен.", reply_to_message_id=message.message_id)
             else:
                 bot.send_message(chat_id, "Неверный формат.", reply_to_message_id=message.message_id)
             del key_change_state[chat_id]
@@ -905,9 +456,8 @@ def text_handler(message):
         elif state["step"] == "waiting_new_prompt":
             new_prompt = message.text.strip()
             if len(new_prompt) > 10:
-                db.set("prompt", new_prompt)
-                global SYSTEM_PROMPT
                 SYSTEM_PROMPT = new_prompt
+                db.set("prompt", new_prompt)
                 bot.send_message(chat_id, "Промпт обновлен.", reply_to_message_id=message.message_id)
             else:
                 bot.send_message(chat_id, "Слишком короткий.", reply_to_message_id=message.message_id)
@@ -920,20 +470,18 @@ def text_handler(message):
         print(f"Ошибка text_handler: {e}")
 
 def show_token_menu(chat_id):
-    ai_key = db.get("key") or "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"
-    masked = ai_key[:15] + "..." + ai_key[-4:] if len(ai_key) > 20 else "***"
+    masked = GIGACHAT_AUTH_KEY[:15] + "..." + GIGACHAT_AUTH_KEY[-4:] if len(GIGACHAT_AUTH_KEY) > 20 else "***"
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("Сменить ключ ИИ", callback_data="key_change:yes"),
+        types.InlineKeyboardButton("Сменить ключ GigaChat", callback_data="key_change:gigachat_yes"),
         types.InlineKeyboardButton("Промпт", callback_data="key_menu:prompt")
     )
-    bot.send_message(chat_id, f"Ключ ИИ (OpenRouter): {masked}", reply_markup=markup)
+    bot.send_message(chat_id, f"Ключ GigaChat: {masked}", reply_markup=markup)
 
 def main():
     global bot_id, bot_username
     
     init_firebase()
-    reload_data()
     load_model_data()
     
     for _ in range(5):
@@ -948,8 +496,6 @@ def main():
             
     print(f"Бот запущен. @{bot_username}")
     print(f"Токен: {BOT_TOKEN[:15]}...{BOT_TOKEN[-4:]}")
-    print(f"Моделей: {len(AVAILABLE_MODELS)}")
-    print(f"Аиро-модели доступны")
     
     atexit.register(save_model_data)
     try:
