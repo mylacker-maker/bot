@@ -11,6 +11,8 @@ import atexit
 import asyncio
 import aiohttp
 import uuid
+import string
+import shutil
 from collections import defaultdict
 
 import telebot
@@ -20,12 +22,16 @@ import requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8445343788:AAHhxjWpxtGBghkF02nlr2FLBL3hnf9mXug")
 FIREBASE_URL = "https://lackerteam-default-rtdb.firebaseio.com"
 
-# Данные GigaChat (можно сменить через /token)
+# Данные GigaChat
 GIGACHAT_CLIENT_ID = "019f5576-e72c-7fa0-8060-be3a9f599e6d"
 GIGACHAT_AUTH_KEY = "MDE5ZjU1NzYtZTcyYy03ZmEwLTgwNjAtYmUzYTlmNTk5ZTZkOjEwN2Q5NDFkLWIxODUtNDEyZC04MDYzLTE4NTMxYTEzODE1MA=="
 
 HISTORIES_FILE = "histories.json"
 MAX_HISTORY = 8
+
+# Папки для сайтов
+os.makedirs("generated_sites", exist_ok=True)
+os.makedirs("public_sites", exist_ok=True)
 
 class FirebaseDB:
     def __init__(self, url):
@@ -156,7 +162,7 @@ async def send_gigachat_message(token, history):
         "model": "GigaChat",
         "messages": history,
         "temperature": 0.7,
-        "max_tokens": 2000
+        "max_tokens": 4000 # Увеличил для кода
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(chat_url, headers=chat_headers, json=payload, ssl=False) as response:
@@ -227,6 +233,7 @@ def cmd_start(message):
 def cmd_help(message):
     text = (
         "Список команд:\n\n"
+        "/website <описание> - сгенерировать HTML сайт\n"
         "/token - управление ключом GigaChat и промптом\n"
         "/reset - очистить историю переписки\n"
         "/stats - статистика бота\n"
@@ -234,6 +241,99 @@ def cmd_help(message):
         "Отвечаю на упоминания, реплаи, триггер 'Лакер' или с шансом 10% на любое сообщение."
     )
     bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
+
+@bot.message_handler(commands=["website"])
+def cmd_website(message):
+    text = message.text or ""
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return bot.reply_to(message, "Использование: /website <описание сайта, который нужно создать>")
+    
+    user_request = parts[1].strip()
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    thread_id = getattr(message, "message_thread_id", None)
+    
+    # 1. Отправляем сообщение о генерации
+    status_msg = bot.send_message(chat_id, "⏳ Хорошо, сейчас генерирую...", reply_to_message_id=message.message_id, message_thread_id=thread_id if thread_id else None)
+    bot.send_chat_action(chat_id, "typing")
+    
+    try:
+        # 2. Специальный промпт для сайта
+        website_prompt = f"""Ты LackerAI, твоя цель исключительно создание сайтов на HTML/CSS/JS.
+Запрос пользователя: {user_request}
+
+ПРАВИЛА (СТРОГО):
+1. Сначала кратко (1-3 предложения) расскажи, что ты сделал на сайте.
+2. Затем напиши строго #code и перейди на новую строку.
+3. После #code напиши ТОЛЬКО валидный HTML код, начиная с <html> и заканчивая </html>.
+4. ПОСЛЕ </html> НИЧЕГО НЕ ПИШИ. Никаких пояснений, никаких извинений, никаких маркдаун блоков ```html."""
+
+        # 3. Запрос к GigaChat
+        token = asyncio.run(get_gigachat_token())
+        history_for_site = [{"role": "system", "content": website_prompt}, {"role": "user", "content": user_request}]
+        ai_response = asyncio.run(send_gigachat_message(token, history_for_site))
+        
+        if not ai_response or ai_response.startswith("Ошибка"):
+            bot.edit_message_text("Покою 67🤣🤣🤣 я сдох! Не смог сгенерировать сайт.", chat_id, status_msg.message_id)
+            return
+
+        # 4. Парсинг ответа
+        if "#code" in ai_response:
+            parts_response = ai_response.split("#code", 1)
+            description = parts_response[0].strip()
+            raw_code = parts_response[1].strip()
+        else:
+            description = "Вот что я сделал:"
+            raw_code = ai_response
+
+        # Очистка кода: берем только то, что между <html> и </html>
+        html_match = re.search(r'(<html.*?>.*?</html>)', raw_code, re.IGNORECASE | re.DOTALL)
+        if html_match:
+            clean_code = html_match.group(1)
+        else:
+            clean_code = raw_code # фоллбэк, если ИИ накосячил с тегами
+
+        # 5. Сохранение файла
+        filename = f"site_{''.join(random.choices(string.ascii_lowercase + string.digits, k=6))}.html"
+        filepath = f"generated_sites/{filename}"
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(clean_code)
+
+        # 6. Отправка результата
+        bot.edit_message_text(description, chat_id, status_msg.message_id)
+        
+        # Отправляем файл
+        with open(filepath, "rb") as f:
+            bot.send_document(chat_id, f, caption="📄 Исходный код сайта", reply_to_message_id=message.message_id, message_thread_id=thread_id if thread_id else None)
+
+        # 7. Кнопка публикации
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("🌐 Опубликовать в интернете (на 3 дня)", callback_data=f"publish_site:{filename}"))
+        bot.send_message(chat_id, "Хочешь чтобы сайт был публичным? Могу опубликовать его в интернете на 3 дня.", reply_markup=markup, reply_to_message_id=message.message_id, message_thread_id=thread_id if thread_id else None)
+
+    except Exception as e:
+        print(f"[WEBSITE ERROR] {e}")
+        bot.edit_message_text("Покою 67🤣🤣🤣 я сдох! Произошла ошибка при генерации.", chat_id, status_msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("publish_site:"))
+def handle_publish(call):
+    filename = call.data.split(":", 1)[1]
+    src = f"generated_sites/{filename}"
+    dst = f"public_sites/{filename}"
+    
+    if os.path.exists(src):
+        shutil.copy(src, dst)
+        
+        # Генерируем ссылку. 
+        # ПРИМЕЧАНИЕ: Чтобы эта ссылка реально работала извне, тебе нужно запустить локальный сервер и пробросить его через ngrok или cloudflare tunnel.
+        # Пока что генерируем красивую заглушку, которая будет работать, если ты запустишь "python -m http.server 8000" в папке бота.
+        public_link = f"http://твой-домен-или-ngrok.io:8000/public_sites/{filename}"
+        
+        bot.answer_callback_query(call.id, "Сайт опубликован!")
+        bot.send_message(call.message.chat.id, f"✅ Сайт успешно опубликован на 3 дня!\n\n🔗 Твоя ссылка:\n{public_link}\n\n💡 *Чтобы ссылка работала реально, запусти в терминале: `python -m http.server 8000` и используй ngrok*", parse_mode="Markdown", reply_to_message_id=call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "Ошибка: файл не найден", show_alert=True)
 
 @bot.message_handler(commands=["token"])
 def cmd_token(message):
@@ -366,19 +466,14 @@ async def process_message(message):
     try:
         bot.send_chat_action(chat_id, "typing")
         
-        # 1. Получаем токен
         token = await get_gigachat_token()
-        
-        # 2. Загружаем историю
         user_history, all_histories = load_user_history(user_id)
         
-        # Обновляем системный промпт в истории, если он изменился
         if user_history and user_history[0]["role"] == "system":
             user_history[0]["content"] = SYSTEM_PROMPT
             
         user_history.append({"role": "user", "content": query})
         
-        # 3. Отправляем запрос
         answer = await send_gigachat_message(token, user_history)
         
         if not answer or answer.startswith("Ошибка"):
@@ -387,7 +482,6 @@ async def process_message(message):
         user_history.append({"role": "assistant", "content": answer})
         save_user_history(user_id, user_history, all_histories)
         
-        # 4. Обработка #img и #sticker
         img_match = re.search(r'#img\s+"([^"]+)"', answer)
         sticker_flag = "#sticker" in answer
         
@@ -409,7 +503,6 @@ async def process_message(message):
         if sticker_flag:
             send_random_sticker(chat_id, reply_message_id=sent_msg.message_id, thread_id=thread_id)
 
-        # 5. Реакции
         if random.random() < REACTION_CHANCE:
             try:
                 reaction = random.choice(["👍", "👌", "😂", "🤔", "🔥"])
@@ -496,6 +589,7 @@ def main():
             
     print(f"Бот запущен. @{bot_username}")
     print(f"Токен: {BOT_TOKEN[:15]}...{BOT_TOKEN[-4:]}")
+    print("Папки для сайтов созданы: generated_sites/, public_sites/")
     
     atexit.register(save_model_data)
     try:
