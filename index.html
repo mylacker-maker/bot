@@ -10,14 +10,14 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
-    --bg: #0f1115;
-    --surface: #181a20;
-    --surface2: #22252e;
-    --border: #2a2d38;
+    --bg: #0b0c10;
+    --surface: #12141a;
+    --surface2: #1a1d25;
+    --border: #232730;
     --text: #ffffff;
-    --text-dim: #8b8f99;
+    --text-dim: #7a7f8a;
     --accent: #4DA6FF;
-    --accent-dim: rgba(77, 166, 255, 0.15);
+    --accent-dim: rgba(77, 166, 255, 0.12);
     --danger: #ff4757;
     --success: #2ed573;
     --rare-1: #95a5a6;
@@ -47,14 +47,14 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .font-bold { font-weight: 700; }
 .text-center { text-align: center; }
 
-.btn { padding: 12px 20px; border-radius: 12px; border: none; font-family: inherit; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
-.btn:active { transform: scale(0.96); }
+.btn { padding: 12px 20px; border-radius: 12px; border: none; font-family: inherit; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.btn:active { transform: scale(0.97); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-surface { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-danger { background: var(--danger); color: #fff; }
-.btn-sm { padding: 8px 12px; font-size: 12px; }
+.btn-sm { padding: 8px 14px; font-size: 12px; border-radius: 10px; }
 
-.input { width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-family: inherit; font-size: 15px; outline: none; }
+.input { width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-family: inherit; font-size: 15px; outline: none; transition: border 0.2s; }
 .input:focus { border-color: var(--accent); }
 
 .header { padding: 16px 20px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
@@ -64,8 +64,8 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .icon-btn { width: 32px; height: 32px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text); display: flex; align-items: center; justify-content: center; cursor: pointer; }
 
 .main { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 20px; min-height: 0; scroll-behavior: smooth; }
-.view { animation: fadeIn 0.3s ease; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.view { animation: fadeIn 0.25s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 .bottom-nav { background: var(--surface); border-top: 1px solid var(--border); display: flex; padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); gap: 8px; flex-shrink: 0; }
 .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; border-radius: 12px; color: var(--text-dim); font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
@@ -73,35 +73,58 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .nav-item svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; }
 
 .gift-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.gift-card { background: var(--surface); border-radius: 12px; border: 1px solid var(--border); overflow: hidden; cursor: pointer; transition: transform 0.2s; }
-.gift-card:active { transform: scale(0.95); }
-.gift-bg { height: 70px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
-.gift-bg img { width: 40px; height: 40px; object-fit: contain; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); z-index: 2; }
-.gift-bg .emoji { font-size: 28px; z-index: 2; }
-.gift-info { padding: 6px 8px; }
-.gift-name { font-size: 10px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gift-rare { font-size: 8px; margin-top: 2px; font-weight: 700; text-transform: uppercase; }
+.gift-card { background: var(--surface); border-radius: 14px; border: 1px solid var(--border); overflow: hidden; cursor: pointer; transition: transform 0.15s; position: relative; }
+.gift-card:active { transform: scale(0.96); }
+.gift-bg { height: 75px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+.gift-bg img, .gift-bg .emoji { max-width: 80%; max-height: 80%; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.4)); z-index: 2; font-size: 32px; }
+.gift-info { padding: 8px; }
+.gift-name { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gift-rare { font-size: 9px; margin-top: 2px; font-weight: 700; text-transform: uppercase; }
+.gift-min-price { font-size: 9px; color: var(--text-dim); margin-top: 3px; }
+.gift-min-price span { color: var(--success); font-weight: 600; }
 
-.market-listing { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; cursor: pointer; transition: background 0.2s; }
+/* Upgrade Shop Card */
+.upgrade-shop-card { background: linear-gradient(135deg, var(--surface2), var(--surface)); border: 1px solid var(--border); border-radius: 16px; padding: 20px; display: flex; align-items: center; gap: 16px; margin-top: 24px; cursor: pointer; transition: all 0.15s; }
+.upgrade-shop-card:active { transform: scale(0.98); }
+.upgrade-shop-icon { font-size: 28px; width: 54px; height: 54px; display: flex; align-items: center; justify-content: center; background: var(--accent-dim); border-radius: 14px; flex-shrink: 0; }
+.upgrade-shop-text { flex: 1; }
+.upgrade-shop-arrow { color: var(--text-dim); flex-shrink: 0; }
+
+.market-listing { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; cursor: pointer; transition: background 0.15s; }
 .market-listing:active { background: var(--surface2); }
-.listing-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.listing-emoji { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 20px; flex-shrink: 0; }
-.listing-emoji img { width: 28px; height: 28px; object-fit: contain; }
+.listing-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+.listing-emoji { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 10px; font-size: 22px; flex-shrink: 0; overflow: hidden; }
+.listing-emoji img { max-width: 80%; max-height: 80%; object-fit: contain; }
 .listing-info { flex: 1; min-width: 0; }
 .listing-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .listing-count { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
 .listing-price { font-weight: 700; color: var(--success); font-size: 14px; flex-shrink: 0; }
 
-.case-open-container { position: relative; height: 140px; background: var(--surface); border-radius: 16px; border: 1px solid var(--border); overflow: hidden; margin-bottom: 20px; }
+/* Case Opening */
+.case-open-container { position: relative; height: 130px; background: var(--surface); border-radius: 16px; border: 1px solid var(--border); overflow: hidden; margin-bottom: 20px; }
 @media (max-width: 400px) { .case-open-container { height: 110px; } }
 .case-strip { display: flex; height: 100%; position: absolute; left: 0; transform: translateX(0); }
 .case-item { width: 100px; height: 100%; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--border); }
-@media (max-width: 400px) { .case-item { width: 70px; } }
-.case-item img { width: 40px; height: 40px; object-fit: contain; margin-bottom: 6px; }
+@media (max-width: 400px) { .case-item { width: 75px; } }
+.case-item img { max-width: 45px; max-height: 45px; object-fit: contain; margin-bottom: 6px; }
 .case-item .emoji { font-size: 36px; margin-bottom: 6px; }
 .case-item-name { font-size: 10px; font-weight: 600; text-align: center; padding: 0 6px; line-height: 1.2; }
-.case-pointer { position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; background: #ffffff; transform: translateX(-50%); z-index: 10; box-shadow: 0 0 10px rgba(255,255,255,0.5); }
-.case-pointer::before { content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%); border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 10px solid #ffffff; }
+
+/* Minimalist Pointer */
+.case-pointer { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: var(--accent); transform: translateX(-50%); z-index: 10; box-shadow: 0 0 12px var(--accent); }
+.case-pointer::before, .case-pointer::after { content: ''; position: absolute; left: 50%; transform: translateX(-50%); width: 12px; height: 12px; background: var(--accent); border-radius: 50%; }
+.case-pointer::before { top: -4px; }
+.case-pointer::after { bottom: -4px; }
+
+/* Drop Notification */
+.drop-notif { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-150px); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; display: flex; overflow: hidden; z-index: 300; transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); box-shadow: 0 15px 40px rgba(0,0,0,0.6); width: 280px; }
+.drop-notif.show { transform: translateX(-50%) translateY(0); }
+.drop-notif-left { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.drop-notif-left img { max-width: 45px; max-height: 45px; object-fit: contain; }
+.drop-notif-left .emoji { font-size: 32px; }
+.drop-notif-right { padding: 12px 16px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.drop-notif-name { font-size: 14px; font-weight: 700; }
+.drop-notif-rare { font-size: 11px; font-weight: 600; margin-top: 2px; }
 
 @keyframes explode {
     0% { transform: scale(1); filter: brightness(1); }
@@ -110,7 +133,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 }
 .explode-anim { animation: explode 0.6s ease-out forwards; }
 
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: flex-end; justify-content: center; opacity: 0; visibility: hidden; transition: all 0.3s; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(6px); z-index: 100; display: flex; align-items: flex-end; justify-content: center; opacity: 0; visibility: hidden; transition: all 0.3s; }
 .modal-overlay.active { opacity: 1; visibility: visible; }
 .modal { background: var(--surface); width: 100%; max-width: 500px; border-radius: 24px 24px 0 0; padding: 24px; transform: translateY(100%); transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1); max-height: 85vh; overflow-y: auto; }
 .modal-overlay.active .modal { transform: translateY(0); }
@@ -121,7 +144,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .auth-title { font-size: 28px; font-weight: 800; margin-bottom: 8px; text-align: center; }
 .auth-subtitle { color: var(--text-dim); text-align: center; margin-bottom: 32px; font-size: 14px; }
 
-.toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-100px); background: var(--surface2); border: 1px solid var(--accent); color: var(--text); padding: 14px 20px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 300; transition: transform 0.4s; max-width: 90%; text-align: center; }
+.toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-100px); background: var(--surface2); border: 1px solid var(--accent); color: var(--text); padding: 14px 20px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 250; transition: transform 0.4s; max-width: 90%; text-align: center; }
 .toast.show { transform: translateX(-50%) translateY(0); }
 
 .admin-section { background: var(--surface); padding: 16px; border-radius: 16px; border: 1px solid var(--border); margin-bottom: 20px; }
@@ -136,12 +159,19 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .upgrade-slots { display: flex; justify-content: center; align-items: center; gap: 16px; margin: 20px 0; }
-.upgrade-slot { width: 80px; height: 80px; border: 2px dashed var(--border); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: var(--surface2); }
-.upgrade-slot.filled { border-style: solid; border-color: var(--accent); }
-.upgrade-slot .emoji { font-size: 32px; }
+.upgrade-slot { width: 85px; height: 85px; border: 2px dashed var(--border); border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: var(--surface2); overflow: hidden; transition: all 0.2s; }
+.upgrade-slot.filled { border-style: solid; border-color: var(--accent); background: var(--surface); }
+.upgrade-slot img { max-width: 50px; max-height: 50px; object-fit: contain; }
+.upgrade-slot .emoji { font-size: 36px; }
 .upgrade-arrow { font-size: 24px; color: var(--text-dim); }
 .upgrade-result { text-align: center; margin-top: 20px; min-height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.upgrade-cost-display { text-align: center; margin: 16px 0; padding: 12px; background: var(--surface2); border-radius: 10px; }
+.upgrade-cost-display { text-align: center; margin: 16px 0; padding: 12px; background: var(--surface2); border-radius: 12px; border: 1px solid var(--border); }
+
+/* Selection highlight in upgrade modal */
+.upgrade-select-item { position: relative; }
+.upgrade-select-item.selected-1 { border: 2px solid var(--success) !important; }
+.upgrade-select-item.selected-2 { border: 2px solid var(--accent) !important; }
+.upgrade-select-badge { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff; z-index: 5; }
 </style>
 </head>
 <body>
@@ -199,13 +229,24 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
                     </div>
                 </div>
             </div>
-            <button class="btn btn-surface w-full" style="margin-top: 24px;" onclick="showView('upgradeView')">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                Улучшение скинов
-            </button>
+            
+            <div class="upgrade-shop-card" onclick="showView('upgradeView')">
+                <div class="upgrade-shop-icon">⭐</div>
+                <div class="upgrade-shop-text">
+                    <div class="font-bold" style="font-size: 15px;">Улучшение скинов</div>
+                    <div class="text-dim text-xs" style="margin-top: 4px;">Объединяй два скина для получения следующего уровня</div>
+                </div>
+                <div class="upgrade-shop-arrow">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                </div>
+            </div>
         </div>
 
         <div id="inventoryView" class="view hidden">
+            <div style="background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <span class="text-sm text-dim">Улучшить скины можно в магазине!</span>
+                <button class="btn btn-sm btn-primary" onclick="showView('shopView')">В магазин</button>
+            </div>
             <h2 class="font-bold" style="margin-bottom: 20px; font-size: 22px;">Инвентарь</h2>
             <div id="inventoryGrid" class="gift-grid"></div>
             <div id="emptyInv" class="text-dim text-center hidden" style="margin-top: 60px;">Инвентарь пуст</div>
@@ -230,11 +271,8 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
             <div class="flex justify-between items-center" style="margin-bottom: 16px;">
                 <h3 class="font-bold">Объявления</h3>
                 <div class="flex gap-2">
-                    <button class="btn btn-sm btn-surface" onclick="openMyListingsModal()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"/></svg>
-                        Мои
-                    </button>
-                    <button class="btn btn-sm btn-surface" onclick="toggleMarketItemSort()" id="marketItemSortBtn">
+                    <button class="btn btn-sm btn-surface" onclick="openMyListingsModal()">Мои</button>
+                    <button class="btn btn-sm btn-surface" onclick="toggleMarketItemSort()">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/></svg>
                     </button>
                     <button class="btn btn-primary" style="padding: 8px 16px; font-size: 13px;" onclick="openSellModal()">Выставить</button>
@@ -329,7 +367,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
                 <h3 class="font-bold" style="margin-bottom: 12px;">Предметы</h3>
                 <input type="hidden" id="adminEditId">
                 <input type="text" id="adminName" class="input" placeholder="Название" style="margin-bottom: 10px;">
-                <input type="text" id="adminImage" class="input" placeholder="Картинка или эмодзи" style="margin-bottom: 10px;">
+                <input type="text" id="adminImage" class="input" placeholder="Картинка (png/webp) или эмодзи" style="margin-bottom: 10px;">
                 <div class="flex gap-2" style="margin-bottom: 10px;">
                     <select id="adminRare" class="input">
                         <option value="1">1 - Обычный</option>
@@ -368,6 +406,14 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 </div>
 
 <div id="toast" class="toast"><span id="toastMsg"></span></div>
+
+<div id="dropNotification" class="drop-notif hidden">
+    <div class="drop-notif-left" id="dropNotifLeft"></div>
+    <div class="drop-notif-right">
+        <div class="drop-notif-name" id="dropNotifName"></div>
+        <div class="drop-notif-rare" id="dropNotifRare"></div>
+    </div>
+</div>
 
 <div class="modal-overlay" id="buyCaseModal">
     <div class="modal">
@@ -486,6 +532,7 @@ let marketListener = null;
 let marketItemListener = null;
 let currentCaseType = 'butterfly_case';
 let currentCasePrice = 100;
+let marketMinPrices = {};
 
 let marketSortOrder = localStorage.getItem('fafy_market_sort') || 'asc';
 let marketItemSortOrder = localStorage.getItem('fafy_market_item_sort') || 'asc';
@@ -506,8 +553,13 @@ function isCaseItem(giftId) {
     return giftId === 'butterfly_case' || giftId === 'steam_punk_case' || (giftId && giftId.endsWith('_case'));
 }
 
+function isImageFile(str) {
+    return str && (str.endsWith('.png') || str.endsWith('.webp') || str.endsWith('.jpg') || str.endsWith('.jpeg'));
+}
+
 window.onload = async () => {
     await loadGifts();
+    loadInitialMarketPrices();
     const savedUser = localStorage.getItem('fafy_user');
     if (savedUser) {
         const snap = await db.ref(`fafy/users/${savedUser}`).once('value');
@@ -523,6 +575,19 @@ window.onload = async () => {
         showAuthForm();
     }
 };
+
+function loadInitialMarketPrices() {
+    db.ref('fafy/market').on('value', snap => {
+        const listings = snap.val() || {};
+        marketMinPrices = {};
+        for (const data of Object.values(listings)) {
+            if (!marketMinPrices[data.giftId] || data.price < marketMinPrices[data.giftId]) {
+                marketMinPrices[data.giftId] = data.price;
+            }
+        }
+        if (document.querySelector('#inventoryView:not(.hidden)')) loadInventory();
+    });
+}
 
 function showAuthForm() {
     document.getElementById('authLoading').classList.add('hidden');
@@ -627,7 +692,7 @@ function showView(viewId) {
     if (viewId === 'marketView') { if (giftsLoaded) startMarketListener(); else setTimeout(() => startMarketListener(), 500); }
     if (viewId === 'caseOpenView') resetCaseView();
     if (viewId === 'adminView') loadAdminGifts();
-    if (viewId === 'upgradeView') resetUpgradeView();
+    if (viewId === 'upgradeView') { resetUpgradeView(); updateUpgradeUI(); }
     if (viewId !== 'marketView' && viewId !== 'marketItemView') stopMarketListener();
     if (viewId !== 'marketItemView') stopMarketItemListener();
 }
@@ -643,10 +708,10 @@ function resetCaseView() {
 }
 
 function renderGiftImage(gift) {
-    if (gift.image && gift.image.endsWith('.png')) {
-        return '<img src="' + gift.image + '" onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'block\'"><span class="emoji" style="display:none">' + (gift.name.charAt(0)) + '</span>';
+    if (isImageFile(gift.image)) {
+        return `<img src="${gift.image}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"><span class="emoji" style="display:none">${gift.name.charAt(0)}</span>`;
     }
-    return '<span class="emoji">' + (gift.image || 'X') + '</span>';
+    return `<span class="emoji">${gift.image || 'X'}</span>`;
 }
 
 async function loadInventory() {
@@ -674,7 +739,9 @@ async function loadInventory() {
             const card = document.createElement('div');
             card.className = 'gift-card';
             card.onclick = () => openGiftAction(item);
-            card.innerHTML = '<div class="gift-bg" style="background: linear-gradient(135deg, ' + item.color + ', ' + item.color + 'BB);">' + renderGiftImage(item) + '</div><div class="gift-info"><div class="gift-name">' + item.name + '</div><div class="gift-rare" style="color: ' + RARITY_COLORS[item.rare] + '">' + RARITY_NAMES[item.rare] + '</div></div>';
+            const minP = marketMinPrices[item.giftId];
+            const priceHtml = minP ? `<div class="gift-min-price">Мин: <span>${minP.toFixed(2)} $</span></div>` : '';
+            card.innerHTML = `<div class="gift-bg" style="background: linear-gradient(135deg, ${item.color}, ${item.color}BB);">${renderGiftImage(item)}</div><div class="gift-info"><div class="gift-name">${item.name}</div><div class="gift-rare" style="color: ${RARITY_COLORS[item.rare]}">${RARITY_NAMES[item.rare]}</div>${priceHtml}</div>`;
             grid.appendChild(card);
         });
     }
@@ -684,12 +751,24 @@ function openGiftAction(item) {
     selectedInventoryItem = item;
     const content = document.getElementById('giftActionContent');
     const itemIsCase = isCaseItem(item.giftId);
+    const minP = marketMinPrices[item.giftId];
+    const priceHtml = minP ? `<div class="text-sm" style="margin-top: 8px; color: var(--text-dim);">Мин. цена на рынке: <span style="color: var(--success); font-weight: 700;">${minP.toFixed(2)} $</span></div>` : '';
+    
     if (itemIsCase) {
-        content.innerHTML = '<div class="text-center" style="margin-bottom: 20px;"><div style="font-size: 64px; margin-bottom: 12px;">' + renderGiftImage(item) + '</div><div class="font-bold" style="font-size: 20px;">' + item.name + '</div>' + (item.isFirst ? '<div class="text-xs text-accent" style="margin-top: 8px;">Первый кейс с гарантированным эпиком!</div>' : '') + '</div><button class="btn btn-primary w-full" onclick="startCaseOpeningFromInv()">Крутить</button><button class="btn btn-surface w-full" style="margin-top: 10px;" onclick="goToMarketToSell(\'' + item.giftId + '\')">Продать на рынке</button>';
+        content.innerHTML = `<div class="text-center" style="margin-bottom: 20px;"><div style="font-size: 64px; margin-bottom: 12px;">${renderGiftImage(item)}</div><div class="font-bold" style="font-size: 20px;">${item.name}</div>${(item.isFirst ? '<div class="text-xs text-accent" style="margin-top: 8px;">Первый кейс с гарантированным эпиком!</div>' : '')}${priceHtml}</div><button class="btn btn-primary w-full" onclick="startCaseOpeningFromInv()">Крутить</button><button class="btn btn-surface w-full" style="margin-top: 10px;" onclick="goToMarketToSell('${item.giftId}')">Продать на рынке</button>`;
     } else {
-        content.innerHTML = '<div class="text-center" style="margin-bottom: 20px;"><div style="font-size: 64px; margin-bottom: 12px;">' + renderGiftImage(item) + '</div><div class="font-bold" style="font-size: 20px;">' + item.name + '</div><div class="text-dim text-sm" style="margin-top: 4px;">' + RARITY_NAMES[item.rare] + '</div></div><button class="btn btn-primary w-full" onclick="goToMarketToSell(\'' + item.giftId + '\')">Продать на рынке</button>';
+        content.innerHTML = `<div class="text-center" style="margin-bottom: 20px;"><div style="font-size: 64px; margin-bottom: 12px;">${renderGiftImage(item)}</div><div class="font-bold" style="font-size: 20px;">${item.name}</div><div class="text-dim text-sm" style="margin-top: 4px;">${RARITY_NAMES[item.rare]}</div>${priceHtml}</div><button class="btn btn-primary w-full" onclick="goToMarketToSell('${item.giftId}')">Продать на рынке</button><button class="btn btn-surface w-full" style="margin-top: 10px;" onclick="goToUpgradeWithItem('${item.giftId}', '${item.invId}')">⭐ Улучшить скин</button>`;
     }
     openModal('giftActionModal');
+}
+
+function goToUpgradeWithItem(giftId, invId) {
+    const gift = giftsData[giftId];
+    upgradeSlot1 = { giftId, invId, ...gift };
+    upgradeSlot2 = null;
+    closeModal('giftActionModal');
+    showView('upgradeView');
+    updateUpgradeUI();
 }
 
 function startCaseOpeningFromInv() {
@@ -747,6 +826,27 @@ function getRandomGiftByRarity(weights) {
     return possibleGifts[0][1];
 }
 
+function showDropNotification(gift) {
+    const notif = document.getElementById('dropNotification');
+    const left = document.getElementById('dropNotifLeft');
+    const name = document.getElementById('dropNotifName');
+    const rare = document.getElementById('dropNotifRare');
+    
+    left.style.background = `linear-gradient(135deg, ${gift.color}, ${gift.color}BB)`;
+    left.innerHTML = renderGiftImage(gift);
+    name.textContent = gift.name;
+    rare.textContent = RARITY_NAMES[gift.rare];
+    rare.style.color = RARITY_COLORS[gift.rare];
+    
+    notif.classList.remove('hidden');
+    setTimeout(() => notif.classList.add('show'), 50);
+    
+    setTimeout(() => {
+        notif.classList.remove('show');
+        setTimeout(() => notif.classList.add('hidden'), 500);
+    }, 3500);
+}
+
 function startCaseOpening() {
     if (isCaseOpening) return;
     db.ref(`fafy/inventory/${currentUser}`).once('value').then(snap => {
@@ -772,7 +872,7 @@ function startCaseOpening() {
         
         const isFast = document.getElementById('fastSpinCheck').checked;
         const duration = isFast ? 0.6 : 4.0;
-        const ITEM_WIDTH = window.innerWidth <= 400 ? 70 : 100;
+        const ITEM_WIDTH = window.innerWidth <= 400 ? 75 : 100;
         const WINNING_POSITION = 35;
         
         const items = [];
@@ -782,9 +882,9 @@ function startCaseOpening() {
         items.forEach(gift => {
             const div = document.createElement('div');
             div.className = 'case-item';
-            div.style.background = 'linear-gradient(180deg, ' + gift.color + '88, ' + gift.color + '55)';
-            div.style.borderBottom = '3px solid ' + gift.color;
-            div.innerHTML = '<div style="margin-bottom:6px;">' + renderGiftImage(gift) + '</div><div class="case-item-name">' + gift.name + '</div>';
+            div.style.background = `linear-gradient(180deg, ${gift.color}44, ${gift.color}11)`;
+            div.style.borderBottom = `2px solid ${gift.color}`;
+            div.innerHTML = `<div style="margin-bottom:6px;">${renderGiftImage(gift)}</div><div class="case-item-name">${gift.name}</div>`;
             strip.appendChild(div);
         });
         
@@ -792,7 +892,7 @@ function startCaseOpening() {
             const containerWidth = strip.parentElement.offsetWidth;
             const offset = (containerWidth / 2) - (WINNING_POSITION * ITEM_WIDTH + ITEM_WIDTH / 2);
             strip.style.transition = `transform ${duration}s cubic-bezier(0.15, 0.85, 0.35, 1.0)`;
-            strip.style.transform = 'translateX(' + offset + 'px)';
+            strip.style.transform = `translateX(${offset}px)`;
         }, 50);
         
         setTimeout(() => {
@@ -802,7 +902,8 @@ function startCaseOpening() {
             const newInvRef = db.ref(`fafy/inventory/${currentUser}`).push();
             const winningId = Object.keys(giftsData).find(key => giftsData[key].name === winningGift.name);
             if (winningId) newInvRef.set({ giftId: winningId, timestamp: Date.now() });
-            showToast('Выпало: ' + winningGift.name + '!');
+            
+            showDropNotification(winningGift);
             if (navigator.vibrate) navigator.vibrate(50);
             setTimeout(() => showView('inventoryView'), isFast ? 500 : 1500);
         }, (duration * 1000) + 200);
@@ -841,23 +942,13 @@ function startMarketListener() {
             return;
         }
         
-        if (marketSortOrder === 'asc') {
-            giftEntries.sort((a, b) => {
-                const itemsA = grouped[a[0]] || [];
-                const itemsB = grouped[b[0]] || [];
-                const minA = itemsA.length > 0 ? Math.min(...itemsA.map(i => i.price)) : Infinity;
-                const minB = itemsB.length > 0 ? Math.min(...itemsB.map(i => i.price)) : Infinity;
-                return minA - minB;
-            });
-        } else {
-            giftEntries.sort((a, b) => {
-                const itemsA = grouped[a[0]] || [];
-                const itemsB = grouped[b[0]] || [];
-                const minA = itemsA.length > 0 ? Math.min(...itemsA.map(i => i.price)) : -Infinity;
-                const minB = itemsB.length > 0 ? Math.min(...itemsB.map(i => i.price)) : -Infinity;
-                return minB - minA;
-            });
-        }
+        giftEntries.sort((a, b) => {
+            const itemsA = grouped[a[0]] || [];
+            const itemsB = grouped[b[0]] || [];
+            const minA = itemsA.length > 0 ? Math.min(...itemsA.map(i => i.price)) : Infinity;
+            const minB = itemsB.length > 0 ? Math.min(...itemsB.map(i => i.price)) : Infinity;
+            return marketSortOrder === 'asc' ? minA - minB : minB - minA;
+        });
         
         for (const [giftId, gift] of giftEntries) {
             if (giftId === 'bear') continue;
@@ -866,7 +957,7 @@ function startMarketListener() {
             const div = document.createElement('div');
             div.className = 'market-listing';
             div.onclick = () => openMarketItem(giftId, items);
-            div.innerHTML = '<div class="listing-left"><div class="listing-emoji" style="background: linear-gradient(135deg, ' + gift.color + ', ' + gift.color + 'BB);">' + (gift.image && gift.image.endsWith('.png') ? '<img src="' + gift.image + '">' : gift.image) + '</div><div class="listing-info"><div class="listing-name">' + gift.name + '</div><div class="listing-count">' + (items.length > 0 ? items.length + ' объявлений' : 'Нет объявлений') + '</div></div></div><div class="flex flex-col items-end"><div class="listing-price">' + (minPrice ? minPrice + ' $' : 'Нет') + '</div>' + (minPrice ? '<div class="text-xs text-dim">мин цена</div>' : '') + '</div>';
+            div.innerHTML = `<div class="listing-left"><div class="listing-emoji" style="background: linear-gradient(135deg, ${gift.color}, ${gift.color}BB);">${renderGiftImage(gift)}</div><div class="listing-info"><div class="listing-name">${gift.name}</div><div class="listing-count">${items.length > 0 ? items.length + ' объявлений' : 'Нет объявлений'}</div></div></div><div class="flex flex-col items-end"><div class="listing-price">${minPrice ? minPrice + ' $' : 'Нет'}</div>${minPrice ? '<div class="text-xs text-dim">мин цена</div>' : ''}</div>`;
             container.appendChild(div);
         }
         requestAnimationFrame(() => { mainEl.scrollTop = scrollTop; });
@@ -902,28 +993,11 @@ function startMarketItemListener(giftId) {
                 if (isOwner) {
                     div.onclick = null;
                     div.style.cursor = 'default';
-                    div.innerHTML = `
-                        <div class="listing-left">
-                            <div class="listing-info">
-                                <div class="listing-name">@${userData.username}</div>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <div class="listing-price">${listing.price.toFixed(2)} $</div>
-                            <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteListing('${listing.id}', '${giftId}')">Удалить</button>
-                        </div>
-                    `;
+                    div.innerHTML = `<div class="listing-left"><div class="listing-info"><div class="listing-name">@${userData.username}</div></div></div><div class="flex items-center gap-2"><div class="listing-price">${listing.price.toFixed(2)} $</div><button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteListing('${listing.id}', '${giftId}')">Удалить</button></div>`;
                 } else {
                     div.onclick = () => buyItem(listing.id, listing.price, listing.sellerId, giftId);
                     db.ref('fafy/users/' + listing.sellerId + '/username').once('value').then(s => {
-                        div.innerHTML = `
-                            <div class="listing-left">
-                                <div class="listing-info">
-                                    <div class="listing-name">@${s.val() || 'Unknown'}</div>
-                                </div>
-                            </div>
-                            <div class="listing-price">${listing.price.toFixed(2)} $</div>
-                        `;
+                        div.innerHTML = `<div class="listing-left"><div class="listing-info"><div class="listing-name">@${s.val() || 'Unknown'}</div></div></div><div class="listing-price">${listing.price.toFixed(2)} $</div>`;
                     });
                 }
                 listContainer.appendChild(div);
@@ -937,14 +1011,14 @@ function stopMarketItemListener() { if (marketItemListener) { db.ref('fafy/marke
 
 function openMarketItem(giftId, listings) {
     currentMarketGiftId = giftId;
-    const gift = giftsData[giftId];
-    document.getElementById('marketItemHeader').innerHTML = `
-        <div style="font-size: 48px; margin-bottom: 8px;">${renderGiftImage(gift)}</div>
-        <div class="font-bold" style="font-size: 20px;">${gift.name}</div>
-        <div class="text-dim text-sm" style="color: ${RARITY_COLORS[gift.rare]}">${RARITY_NAMES[gift.rare]}</div>
-    `;
+    setMarketItemHeader(giftId);
     showView('marketItemView');
     startMarketItemListener(giftId);
+}
+
+function setMarketItemHeader(giftId) {
+    const gift = giftsData[giftId];
+    document.getElementById('marketItemHeader').innerHTML = `<div style="font-size: 48px; margin-bottom: 8px;">${renderGiftImage(gift)}</div><div class="font-bold" style="font-size: 20px;">${gift.name}</div><div class="text-dim text-sm" style="color: ${RARITY_COLORS[gift.rare]}">${RARITY_NAMES[gift.rare]}</div>`;
 }
 
 async function deleteListing(listingId, giftId) {
@@ -1026,6 +1100,7 @@ async function buyItem(listingId, price, sellerId, giftId) {
 function goToMarketToSell(giftId) {
     closeModal('giftActionModal');
     currentMarketGiftId = giftId;
+    setMarketItemHeader(giftId); // FIX: Set header here too!
     showView('marketItemView');
     startMarketItemListener(giftId);
 }
@@ -1040,7 +1115,6 @@ async function openMyListingsModal() {
     list.innerHTML = '';
     
     let entries = Object.entries(data);
-    
     if (currentMarketGiftId) {
         entries = entries.filter(([id, listing]) => listing.giftId === currentMarketGiftId);
     }
@@ -1055,18 +1129,7 @@ async function openMyListingsModal() {
         if (!gift) continue;
         const div = document.createElement('div');
         div.className = 'market-listing';
-        div.innerHTML = `
-            <div class="listing-left">
-                <div class="listing-emoji" style="background: linear-gradient(135deg, ${gift.color}, ${gift.color}BB); font-size: 16px;">
-                    ${gift.image && gift.image.endsWith('.png') ? '<img src="' + gift.image + '">' : gift.image}
-                </div>
-                <div class="listing-info">
-                    <div class="listing-name">${gift.name}</div>
-                    <div class="listing-count">Цена: ${listing.price.toFixed(2)} $</div>
-                </div>
-            </div>
-            <button class="btn btn-sm btn-danger" onclick="deleteMyListing('${id}', '${listing.giftId}')">Удалить</button>
-        `;
+        div.innerHTML = `<div class="listing-left"><div class="listing-emoji" style="background: linear-gradient(135deg, ${gift.color}, ${gift.color}BB);">${renderGiftImage(gift)}</div><div class="listing-info"><div class="listing-name">${gift.name}</div><div class="listing-count">Цена: ${listing.price.toFixed(2)} $</div></div></div><button class="btn btn-sm btn-danger" onclick="deleteMyListing('${id}', '${listing.giftId}')">Удалить</button>`;
         list.appendChild(div);
     }
 }
@@ -1108,7 +1171,7 @@ async function loadHistory() {
         else if (item.status === false) { st = 'Отклонено'; clr = 'var(--danger)'; }
         const d = document.createElement('div');
         d.style.cssText = 'background:var(--surface);border-radius:12px;padding:14px;margin-bottom:10px;border-left:4px solid ' + clr;
-        d.innerHTML = '<div class="flex justify-between items-center"><span class="font-bold">Мишка (1000$)</span><span class="text-xs font-bold" style="color:' + clr + '">' + st + '</span></div><div class="text-dim text-xs" style="margin-top:6px;">' + new Date(item.timestamp).toLocaleString() + '</div>' + (item.error ? '<div class="text-xs" style="color:var(--danger);margin-top:4px;">Причина: ' + item.error + '</div>' : '');
+        d.innerHTML = `<div class="flex justify-between items-center"><span class="font-bold">Мишка (1000$)</span><span class="text-xs font-bold" style="color:${clr}">${st}</span></div><div class="text-dim text-xs" style="margin-top:6px;">${new Date(item.timestamp).toLocaleString()}</div>${item.error ? `<div class="text-xs" style="color:var(--danger);margin-top:4px;">Причина: ${item.error}</div>` : ''}`;
         list.appendChild(d);
     });
 }
@@ -1116,7 +1179,6 @@ async function loadHistory() {
 function resetUpgradeView() {
     upgradeSlot1 = null;
     upgradeSlot2 = null;
-    updateUpgradeUI();
     document.getElementById('upgradeResult').classList.add('hidden');
     document.getElementById('upgradeBtn').disabled = true;
 }
@@ -1136,9 +1198,19 @@ function openUpgradeSelector(slotNum) {
             if (gift && !isCaseItem(data.giftId)) {
                 hasItems = true;
                 const card = document.createElement('div');
-                card.className = 'gift-card';
+                card.className = 'gift-card upgrade-select-item';
+                
+                let badgeHtml = '';
+                if (upgradeSlot1 && upgradeSlot1.invId === id) {
+                    card.classList.add('selected-1');
+                    badgeHtml = '<div class="upgrade-select-badge" style="background:var(--success);">1</div>';
+                } else if (upgradeSlot2 && upgradeSlot2.invId === id) {
+                    card.classList.add('selected-2');
+                    badgeHtml = '<div class="upgrade-select-badge" style="background:var(--accent);">2</div>';
+                }
+                
                 card.onclick = () => selectUpgradeItem(data.giftId, id, gift);
-                card.innerHTML = '<div class="gift-bg" style="background: linear-gradient(135deg, ' + gift.color + ', ' + gift.color + 'BB);">' + renderGiftImage(gift) + '</div><div class="gift-info"><div class="gift-name">' + gift.name + '</div><div class="gift-rare" style="color: ' + RARITY_COLORS[gift.rare] + '">' + RARITY_NAMES[gift.rare] + '</div></div>';
+                card.innerHTML = `<div class="gift-bg" style="background: linear-gradient(135deg, ${gift.color}, ${gift.color}BB);">${renderGiftImage(gift)}</div><div class="gift-info"><div class="gift-name">${gift.name}</div><div class="gift-rare" style="color: ${RARITY_COLORS[gift.rare]}">${RARITY_NAMES[gift.rare]}</div></div>${badgeHtml}`;
                 list.appendChild(card);
             }
         }
@@ -1173,10 +1245,10 @@ function updateUpgradeUI() {
     const costValue = document.getElementById('upgradeCostValue');
     
     s1.className = 'upgrade-slot' + (upgradeSlot1 ? ' filled' : '');
-    s1.innerHTML = upgradeSlot1 ? `<div style="font-size:32px;">${renderGiftImage(upgradeSlot1)}</div><div class="text-xs" style="margin-top:4px; color:${RARITY_COLORS[upgradeSlot1.rare]}">${RARITY_NAMES[upgradeSlot1.rare]}</div>` : '<span class="text-dim text-xs">Слот 1</span>';
+    s1.innerHTML = upgradeSlot1 ? `<div style="display:flex;align-items:center;justify-content:center;height:100%;">${renderGiftImage(upgradeSlot1)}</div><div class="text-xs" style="position:absolute;bottom:4px;color:${RARITY_COLORS[upgradeSlot1.rare]};font-weight:600;">${RARITY_NAMES[upgradeSlot1.rare]}</div>` : '<span class="text-dim text-xs">Слот 1</span>';
     
     s2.className = 'upgrade-slot' + (upgradeSlot2 ? ' filled' : '');
-    s2.innerHTML = upgradeSlot2 ? `<div style="font-size:32px;">${renderGiftImage(upgradeSlot2)}</div><div class="text-xs" style="margin-top:4px; color:${RARITY_COLORS[upgradeSlot2.rare]}">${RARITY_NAMES[upgradeSlot2.rare]}</div>` : '<span class="text-dim text-xs">Слот 2</span>';
+    s2.innerHTML = upgradeSlot2 ? `<div style="display:flex;align-items:center;justify-content:center;height:100%;">${renderGiftImage(upgradeSlot2)}</div><div class="text-xs" style="position:absolute;bottom:4px;color:${RARITY_COLORS[upgradeSlot2.rare]};font-weight:600;">${RARITY_NAMES[upgradeSlot2.rare]}</div>` : '<span class="text-dim text-xs">Слот 2</span>';
     
     document.getElementById('upgradeBtn').disabled = !(upgradeSlot1 && upgradeSlot2);
     
@@ -1227,16 +1299,13 @@ async function performUpgrade() {
         const resDiv = document.getElementById('upgradeResult');
         const resContent = document.getElementById('upgradeResultContent');
         resDiv.classList.remove('hidden');
-        resContent.innerHTML = `
-            <div style="font-size: 64px; margin-bottom: 8px; animation: fadeIn 0.5s;">${renderGiftImage(wonGift)}</div>
-            <div class="font-bold" style="font-size: 18px; color: ${RARITY_COLORS[wonGift.rare]}">${wonGift.name}</div>
-            <div class="text-dim text-sm">${RARITY_NAMES[wonGift.rare]}</div>
-        `;
+        resContent.innerHTML = `<div style="font-size: 64px; margin-bottom: 8px; animation: fadeIn 0.5s;">${renderGiftImage(wonGift)}</div><div class="font-bold" style="font-size: 18px; color: ${RARITY_COLORS[wonGift.rare]}">${wonGift.name}</div><div class="text-dim text-sm">${RARITY_NAMES[wonGift.rare]}</div>`;
         
         btn.textContent = 'Готово';
         setTimeout(() => {
             btn.textContent = 'Улучшить';
             resetUpgradeView();
+            updateUpgradeUI();
         }, 2000);
         
     }, 600);
@@ -1252,7 +1321,7 @@ async function loadAdminGifts() {
         if (id === 'bear') continue;
         const d = document.createElement('div');
         d.className = 'admin-row';
-        d.innerHTML = `<div class="flex items-center gap-2"><div style="width:32px;height:32px;border-radius:6px;background:linear-gradient(135deg,${gift.color},${gift.color}BB);display:flex;align-items:center;justify-content:center;">${gift.image && gift.image.endsWith('.png') ? '<img src="' + gift.image + '" style="width:24px;height:24px;object-fit:contain;">' : gift.image}</div><div><div class="font-bold text-sm">${gift.name}</div><div class="text-xs text-dim">${RARITY_NAMES[gift.rare]}${isCaseItem(id) ? ' (Кейс)' : ''}</div></div></div><div class="flex gap-2"><button class="btn btn-sm btn-surface" onclick="editAdminGift('${id}')">Изм.</button><button class="btn btn-sm btn-danger" onclick="deleteAdminGift('${id}')">Удал.</button></div>`;
+        d.innerHTML = `<div class="flex items-center gap-2"><div style="width:32px;height:32px;border-radius:6px;background:linear-gradient(135deg,${gift.color},${gift.color}BB);display:flex;align-items:center;justify-content:center;overflow:hidden;">${renderGiftImage(gift)}</div><div><div class="font-bold text-sm">${gift.name}</div><div class="text-xs text-dim">${RARITY_NAMES[gift.rare]}${isCaseItem(id) ? ' (Кейс)' : ''}</div></div></div><div class="flex gap-2"><button class="btn btn-sm btn-surface" onclick="editAdminGift('${id}')">Изм.</button><button class="btn btn-sm btn-danger" onclick="deleteAdminGift('${id}')">Удал.</button></div>`;
         list.appendChild(d);
     }
 }
@@ -1295,7 +1364,20 @@ function clearAdminForm() {
     document.getElementById('adminColor').value = '#95a5a6';
 }
 
-function openModal(id) { document.getElementById(id).classList.add('active'); }
+function openModal(id) { 
+    if (id === 'dropRatesModal') {
+        const w = currentCaseType === 'steam_punk_case' ? STEAM_PUNK_WEIGHTS : BUTTERFLY_WEIGHTS;
+        const n = giftsData[currentCaseType] ? giftsData[currentCaseType].name : 'Кейс';
+        let html = `<h4 class="font-bold" style="margin-bottom:12px;">${n}</h4><div class="flex flex-col gap-2">`;
+        for(let i=1; i<=5; i++) {
+            html += `<div class="flex justify-between items-center" style="padding:12px;background:var(--surface2);border-radius:10px;border-left:4px solid ${RARITY_COLORS[i]};"><span style="color:${RARITY_COLORS[i]}; font-weight:600;">${RARITY_NAMES[i]}</span><span class="font-bold">${w[i-1]}%</span></div>`;
+        }
+        html += '</div>';
+        document.getElementById('dropRatesContent').innerHTML = html;
+    }
+    document.getElementById(id).classList.add('active'); 
+}
+
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
 document.querySelectorAll('.modal-overlay').forEach(o => { o.addEventListener('click', e => { if (e.target === o) o.classList.remove('active'); }); });
 
