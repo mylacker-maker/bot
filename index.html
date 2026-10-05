@@ -2,23 +2,41 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Тест — открыть Google</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Rotate Test</title>
 <style>
-body {
-    font-family: Arial, sans-serif;
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
     background: #0f0f1a;
     color: #fff;
+    font-family: Arial, sans-serif;
+}
+
+#app {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
-    margin: 0;
+    height: 100%;
+    gap: 20px;
     padding: 20px;
+}
+
+h1 {
+    color: #a78bfa;
+    font-size: 24px;
     text-align: center;
 }
-h1 { color: #a78bfa; margin-bottom: 20px; }
+
 button {
     padding: 20px 40px;
     background: #a78bfa;
@@ -28,42 +46,89 @@ button {
     font-size: 18px;
     font-weight: bold;
     cursor: pointer;
-    margin: 10px;
+    width: 100%;
+    max-width: 300px;
 }
 button:active { transform: scale(0.95); }
-a {
-    color: #a78bfa;
-    font-size: 18px;
-    text-decoration: none;
-    padding: 20px 40px;
-    border: 2px solid #a78bfa;
-    border-radius: 12px;
+
+#status {
+    color: #888;
+    font-size: 14px;
+    text-align: center;
+    margin-top: 20px;
+}
+
+.badge {
     display: inline-block;
-    margin: 10px;
+    padding: 4px 12px;
+    background: #a78bfa33;
+    border: 1px solid #a78bfa;
+    border-radius: 20px;
+    color: #a78bfa;
+    font-size: 14px;
+    margin-top: 10px;
 }
 </style>
 </head>
 <body>
 
-<h1>Тест</h1>
-<p>Жми кнопку — откроется Google в системном браузере</p>
+<div id="app">
+    <h1>🎮 Rotate Test</h1>
+    <p>Смена ориентации через URL</p>
 
-<!-- СПОСОБ 1: Ссылка с target="_blank" -->
-<a href="https://www.google.com" target="_blank">🌐 Открыть Google (способ 1)</a>
+    <button onclick="rotate(1)">📱 Ориентация 1 (приложение)</button>
+    <button onclick="rotate(2)">🖥 Ориентация 2 (игра)</button>
 
-<br><br>
+    <div id="status">Текущая ориентация: не выбрана</div>
+    <div class="badge" id="urlBadge">URL: -</div>
+</div>
 
-<!-- СПОСОБ 2: Кнопка через window.open() -->
-<button onclick="window.open('https://www.google.com', '_blank')">
-    🌐 Открыть Google (способ 2)
-</button>
+<script>
+// ===== СМЕНА ОРИЕНТАЦИИ ЧЕРЕЗ URL =====
+function rotate(mode) {
+    // Меняем URL без перезагрузки (?1 или ?2)
+    history.pushState({}, "", "?" + mode);
+    
+    // Обновляем интерфейс
+    updateStatus(mode);
+    
+    // Логируем (CCode увидит)
+    console.log("[ROTATE] URL изменён на: ?" + mode);
+}
 
-<br><br>
+// ===== ОБНОВЛЕНИЕ СТАТУСА =====
+function updateStatus(mode) {
+    const status = document.getElementById('status');
+    const badge = document.getElementById('urlBadge');
+    
+    if (mode == 1) {
+        status.textContent = "Текущая ориентация: 📱 Приложение (портрет)";
+    } else if (mode == 2) {
+        status.textContent = "Текущая ориентация: 🖥 Игра (ландшафт)";
+    } else {
+        status.textContent = "Текущая ориентация: не выбрана";
+    }
+    
+    badge.textContent = "URL: " + window.location.pathname + window.location.search;
+}
 
-<!-- СПОСОБ 3: Кнопка через window.location -->
-<button onclick="window.location.href='https://www.google.com'">
-    🌐 Открыть Google (способ 3)
-</button>
+// ===== ПРИ ЗАГРУЗКЕ — ПРОВЕРЯЕМ URL =====
+window.addEventListener('load', () => {
+    const params = window.location.search.replace('?', '');
+    if (params == "1" || params == "2") {
+        updateStatus(params);
+    }
+});
+
+// ===== СЛЕДИМ ЗА КНОПКОЙ "НАЗАД" =====
+window.addEventListener('popstate', () => {
+    const params = window.location.search.replace('?', '');
+    updateStatus(params);
+});
+
+// ===== ПЕРВОНАЧАЛЬНЫЙ СТАТУС =====
+updateStatus(window.location.search.replace('?', ''));
+</script>
 
 </body>
 </html>
