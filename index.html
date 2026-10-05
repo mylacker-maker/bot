@@ -67,6 +67,9 @@ button:active { transform: scale(0.95); }
     color: #a78bfa;
     font-size: 14px;
     margin-top: 10px;
+    word-break: break-all;
+    max-width: 90%;
+    text-align: center;
 }
 </style>
 </head>
@@ -74,7 +77,7 @@ button:active { transform: scale(0.95); }
 
 <div id="app">
     <h1>🎮 Rotate Test</h1>
-    <p>Смена ориентации через URL</p>
+    <p>Смена ориентации через hash</p>
 
     <button onclick="rotate(1)">📱 Ориентация 1 (приложение)</button>
     <button onclick="rotate(2)">🖥 Ориентация 2 (игра)</button>
@@ -84,16 +87,13 @@ button:active { transform: scale(0.95); }
 </div>
 
 <script>
-// ===== СМЕНА ОРИЕНТАЦИИ ЧЕРЕЗ URL =====
+// ===== СМЕНА ОРИЕНТАЦИИ ЧЕРЕЗ HASH =====
 function rotate(mode) {
-    // Меняем URL без перезагрузки (?1 или ?2)
-    history.pushState({}, "", "?" + mode);
+    // Хэш с уникальным суффиксом — гарантирует изменение URL
+    window.location.hash = "r" + mode + "_" + Date.now();
     
-    // Обновляем интерфейс
     updateStatus(mode);
-    
-    // Логируем (CCode увидит)
-    console.log("[ROTATE] URL изменён на: ?" + mode);
+    console.log("[ROTATE] hash изменён на: #r" + mode);
 }
 
 // ===== ОБНОВЛЕНИЕ СТАТУСА =====
@@ -109,25 +109,37 @@ function updateStatus(mode) {
         status.textContent = "Текущая ориентация: не выбрана";
     }
     
-    badge.textContent = "URL: " + window.location.pathname + window.location.search;
+    badge.textContent = "URL: " + window.location.pathname + window.location.search + window.location.hash;
 }
 
-// ===== ПРИ ЗАГРУЗКЕ — ПРОВЕРЯЕМ URL =====
+// ===== РАСПОЗНАВАНИЕ РЕЖИМА ИЗ HASH =====
+function parseMode() {
+    const hash = window.location.hash.replace('#', '');
+    // Формат: r1_1234567890 или r2_1234567890
+    const match = hash.match(/^r([12])_/);
+    return match ? match[1] : null;
+}
+
+// ===== ПРИ ЗАГРУЗКЕ =====
 window.addEventListener('load', () => {
-    const params = window.location.search.replace('?', '');
-    if (params == "1" || params == "2") {
-        updateStatus(params);
+    // Инициализация — выставляем дефолтный hash
+    if (!window.location.hash) {
+        window.location.hash = "init";
     }
+    
+    const mode = parseMode();
+    if (mode) updateStatus(mode);
 });
 
-// ===== СЛЕДИМ ЗА КНОПКОЙ "НАЗАД" =====
-window.addEventListener('popstate', () => {
-    const params = window.location.search.replace('?', '');
-    updateStatus(params);
+// ===== СЛЕДИМ ЗА ИЗМЕНЕНИЕМ HASH =====
+window.addEventListener('hashchange', () => {
+    const mode = parseMode();
+    updateStatus(mode || null);
 });
 
 // ===== ПЕРВОНАЧАЛЬНЫЙ СТАТУС =====
-updateStatus(window.location.search.replace('?', ''));
+const initialMode = parseMode();
+if (initialMode) updateStatus(initialMode);
 </script>
 
 </body>
