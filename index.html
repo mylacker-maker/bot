@@ -1,146 +1,187 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Rotate Test</title>
-<style>
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
-}
-html, body {
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: #0f0f1a;
-    color: #fff;
-    font-family: Arial, sans-serif;
-}
-
-#app {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    gap: 20px;
-    padding: 20px;
-}
-
-h1 {
-    color: #a78bfa;
-    font-size: 24px;
-    text-align: center;
-}
-
-button {
-    padding: 20px 40px;
-    background: #a78bfa;
-    color: #0f0f1a;
-    border: none;
-    border-radius: 12px;
-    font-size: 18px;
-    font-weight: bold;
-    cursor: pointer;
-    width: 100%;
-    max-width: 300px;
-}
-button:active { transform: scale(0.95); }
-
-#status {
-    color: #888;
-    font-size: 14px;
-    text-align: center;
-    margin-top: 20px;
-}
-
-.badge {
-    display: inline-block;
-    padding: 4px 12px;
-    background: #a78bfa33;
-    border: 1px solid #a78bfa;
-    border-radius: 20px;
-    color: #a78bfa;
-    font-size: 14px;
-    margin-top: 10px;
-    word-break: break-all;
-    max-width: 90%;
-    text-align: center;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Тест камеры</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a2e;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        h1 {
+            margin-bottom: 20px;
+            color: #e94560;
+        }
+        
+        #status {
+            background: #16213e;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 600px;
+            text-align: center;
+        }
+        
+        #video {
+            width: 100%;
+            max-width: 600px;
+            border: 3px solid #e94560;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        #canvas {
+            display: none;
+        }
+        
+        .button {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 10px;
+            transition: background 0.3s;
+        }
+        
+        .button:hover {
+            background: #c73e54;
+        }
+        
+        .button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        
+        #photo {
+            max-width: 100%;
+            border: 3px solid #0f3460;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
 </head>
 <body>
-
-<div id="app">
-    <h1>🎮 Rotate Test 2</h1>
-    <p>Смена ориентации через hash</p>
-
-    <button onclick="rotate(1)">📱 Ориентация 1 (приложение)</button>
-    <button onclick="rotate(2)">🖥 Ориентация 2 (игра)</button>
-
-    <div id="status">Текущая ориентация: не выбрана</div>
-    <div class="badge" id="urlBadge">URL: -</div>
-</div>
-
-<script>
-// ===== СМЕНА ОРИЕНТАЦИИ ЧЕРЕЗ HASH =====
-function rotate(mode) {
-    // Хэш с уникальным суффиксом — гарантирует изменение URL
-    window.location.hash = "r" + mode + "_" + Date.now();
+    <h1> Тест камеры</h1>
     
-    updateStatus(mode);
-    console.log("[ROTATE] hash изменён на: #r" + mode);
-}
-
-// ===== ОБНОВЛЕНИЕ СТАТУСА =====
-function updateStatus(mode) {
-    const status = document.getElementById('status');
-    const badge = document.getElementById('urlBadge');
+    <div id="status">Нажмите кнопку для запуска камеры</div>
     
-    if (mode == 1) {
-        status.textContent = "Текущая ориентация: 📱 Приложение (портрет)";
-    } else if (mode == 2) {
-        status.textContent = "Текущая ориентация: 🖥 Игра (ландшафт)";
-    } else {
-        status.textContent = "Текущая ориентация: не выбрана";
-    }
+    <button id="startBtn" class="button">🎥 Включить камеру</button>
+    <button id="captureBtn" class="button" disabled>📸 Сделать фото</button>
+    <button id="stopBtn" class="button" disabled>⏹ Остановить</button>
     
-    badge.textContent = "URL: " + window.location.pathname + window.location.search + window.location.hash;
-}
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <img id="photo" alt="Сделанное фото">
 
-// ===== РАСПОЗНАВАНИЕ РЕЖИМА ИЗ HASH =====
-function parseMode() {
-    const hash = window.location.hash.replace('#', '');
-    // Формат: r1_1234567890 или r2_1234567890
-    const match = hash.match(/^r([12])_/);
-    return match ? match[1] : null;
-}
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const photo = document.getElementById('photo');
+        const startBtn = document.getElementById('startBtn');
+        const captureBtn = document.getElementById('captureBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        
+        let stream = null;
 
-// ===== ПРИ ЗАГРУЗКЕ =====
-window.addEventListener('load', () => {
-    // Инициализация — выставляем дефолтный hash
-    if (!window.location.hash) {
-        window.location.hash = "init";
-    }
-    
-    const mode = parseMode();
-    if (mode) updateStatus(mode);
-});
+        // Проверка поддержки API
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            status.textContent = '❌ API камеры не поддерживается в этом браузере';
+            startBtn.disabled = true;
+        } else {
+            status.textContent = '✅ API поддерживается. Нажми кнопку.';
+        }
 
-// ===== СЛЕДИМ ЗА ИЗМЕНЕНИЕМ HASH =====
-window.addEventListener('hashchange', () => {
-    const mode = parseMode();
-    updateStatus(mode || null);
-});
+        // Запуск камеры
+        startBtn.addEventListener('click', async () => {
+            try {
+                status.textContent = ' Запрос доступа к камере...';
+                
+                // Запрашиваем камеру и микрофон
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'environment', // Задняя камера
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }, 
+                    audio: true 
+                });
+                
+                video.srcObject = stream;
+                video.style.display = 'block';
+                
+                startBtn.disabled = true;
+                captureBtn.disabled = false;
+                stopBtn.disabled = false;
+                
+                status.textContent = '✅ Камера активна!';
+                
+            } catch (err) {
+                console.error('Ошибка доступа к камере:', err);
+                
+                if (err.name === 'NotAllowedError') {
+                    status.textContent = '❌ Доступ к камере запрещён пользователем';
+                } else if (err.name === 'NotFoundError') {
+                    status.textContent = '❌ Камера не найдена';
+                } else if (err.name === 'NotReadableError') {
+                    status.textContent = '❌ Камера занята другим приложением';
+                } else {
+                    status.textContent = '❌ Ошибка: ' + err.message;
+                }
+            }
+        });
 
-// ===== ПЕРВОНАЧАЛЬНЫЙ СТАТУС =====
-const initialMode = parseMode();
-if (initialMode) updateStatus(initialMode);
-</script>
+        // Сделать фото
+        captureBtn.addEventListener('click', () => {
+            if (!stream) return;
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            photo.src = canvas.toDataURL('image/png');
+            photo.style.display = 'block';
+            
+            status.textContent = ' Фото сделано!';
+        });
 
+        // Остановить камеру
+        stopBtn.addEventListener('click', () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            video.style.display = 'none';
+            video.srcObject = null;
+            
+            startBtn.disabled = false;
+            captureBtn.disabled = true;
+            stopBtn.disabled = true;
+            
+            status.textContent = '⏹ Камера остановлена';
+        });
+    </script>
 </body>
 </html>
