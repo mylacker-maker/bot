@@ -2,15 +2,10 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Тест камеры</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: Arial, sans-serif;
             background: #1a1a2e;
@@ -21,12 +16,7 @@
             padding: 20px;
             min-height: 100vh;
         }
-        
-        h1 {
-            margin-bottom: 20px;
-            color: #e94560;
-        }
-        
+        h1 { margin-bottom: 20px; color: #e94560; }
         #status {
             background: #16213e;
             padding: 15px;
@@ -36,19 +26,14 @@
             max-width: 600px;
             text-align: center;
         }
-        
         #video {
             width: 100%;
             max-width: 600px;
             border: 3px solid #e94560;
             border-radius: 8px;
             display: none;
+            background: #000;
         }
-        
-        #canvas {
-            display: none;
-        }
-        
         .button {
             background: #e94560;
             color: white;
@@ -58,18 +43,9 @@
             border-radius: 8px;
             cursor: pointer;
             margin: 10px;
-            transition: background 0.3s;
+            min-width: 200px;
         }
-        
-        .button:hover {
-            background: #c73e54;
-        }
-        
-        .button:disabled {
-            background: #555;
-            cursor: not-allowed;
-        }
-        
+        .button:disabled { background: #555; cursor: not-allowed; }
         #photo {
             max-width: 100%;
             border: 3px solid #0f3460;
@@ -77,20 +53,29 @@
             margin-top: 20px;
             display: none;
         }
+        #errorLog {
+            background: #330000;
+            color: #ff6666;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 12px;
+            display: none;
+            max-width: 600px;
+            word-wrap: break-word;
+        }
     </style>
 </head>
 <body>
     <h1> Тест камеры</h1>
-    
-    <div id="status">Нажмите кнопку для запуска камеры</div>
-    
-    <button id="startBtn" class="button">🎥 Включить камеру</button>
-    <button id="captureBtn" class="button" disabled>📸 Сделать фото</button>
-    <button id="stopBtn" class="button" disabled>⏹ Остановить</button>
-    
+    <div id="status">Проверка поддержки API...</div>
+    <button id="startBtn" class="button">Включить камеру</button>
+    <button id="captureBtn" class="button" disabled>Сделать фото</button>
+    <button id="stopBtn" class="button" disabled>Остановить</button>
     <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-    <img id="photo" alt="Сделанное фото">
+    <canvas id="canvas" style="display:none"></canvas>
+    <img id="photo" alt="Фото">
+    <div id="errorLog"></div>
 
     <script>
         const video = document.getElementById('video');
@@ -100,87 +85,81 @@
         const captureBtn = document.getElementById('captureBtn');
         const stopBtn = document.getElementById('stopBtn');
         const status = document.getElementById('status');
-        
+        const errorLog = document.getElementById('errorLog');
         let stream = null;
 
-        // Проверка поддержки API
+        function showError(msg) {
+            errorLog.style.display = 'block';
+            errorLog.textContent = msg;
+            console.error(msg);
+        }
+
+        // Проверка поддержки
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            status.textContent = '❌ API камеры не поддерживается в этом браузере';
+            status.textContent = '❌ API камеры не поддерживается';
             startBtn.disabled = true;
         } else {
             status.textContent = '✅ API поддерживается. Нажми кнопку.';
         }
 
-        // Запуск камеры
         startBtn.addEventListener('click', async () => {
             try {
-                status.textContent = ' Запрос доступа к камере...';
-                
-                // Запрашиваем камеру и микрофон
-                stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { 
-                        facingMode: 'environment', // Задняя камера
+                status.textContent = '⏳ Запрос доступа к камере...';
+                errorLog.style.display = 'none';
+
+                // ВАЖНО: только video, без audio — чтобы не запрашивать микрофон
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: 'environment' },
                         width: { ideal: 1280 },
                         height: { ideal: 720 }
-                    }, 
-                    audio: true 
+                    }
+                    // audio убран намеренно
                 });
-                
+
                 video.srcObject = stream;
                 video.style.display = 'block';
-                
+
                 startBtn.disabled = true;
                 captureBtn.disabled = false;
                 stopBtn.disabled = false;
-                
                 status.textContent = '✅ Камера активна!';
-                
+
             } catch (err) {
-                console.error('Ошибка доступа к камере:', err);
-                
+                showError('Ошибка: ' + err.name + ' — ' + err.message);
                 if (err.name === 'NotAllowedError') {
-                    status.textContent = '❌ Доступ к камере запрещён пользователем';
+                    status.textContent = '❌ Доступ запрещён';
                 } else if (err.name === 'NotFoundError') {
-                    status.textContent = '❌ Камера не найдена';
+                    status.textContent = ' Камера не найдена';
                 } else if (err.name === 'NotReadableError') {
-                    status.textContent = '❌ Камера занята другим приложением';
+                    status.textContent = '❌ Камера занята';
                 } else {
-                    status.textContent = '❌ Ошибка: ' + err.message;
+                    status.textContent = '❌ Ошибка: ' + err.name;
                 }
             }
         });
 
-        // Сделать фото
         captureBtn.addEventListener('click', () => {
             if (!stream) return;
-            
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
+            canvas.getContext('2d').drawImage(video, 0, 0);
             photo.src = canvas.toDataURL('image/png');
             photo.style.display = 'block';
-            
-            status.textContent = ' Фото сделано!';
+            status.textContent = '📸 Фото сделано!';
         });
 
-        // Остановить камеру
         stopBtn.addEventListener('click', () => {
             if (stream) {
-                stream.getTracks().forEach(track => track.stop());
+                stream.getTracks().forEach(t => t.stop());
                 stream = null;
             }
-            
             video.style.display = 'none';
             video.srcObject = null;
-            
             startBtn.disabled = false;
             captureBtn.disabled = true;
             stopBtn.disabled = true;
-            
-            status.textContent = '⏹ Камера остановлена';
+            status.textContent = ' Остановлено';
         });
     </script>
 </body>
